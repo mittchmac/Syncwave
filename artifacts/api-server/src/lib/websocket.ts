@@ -10,11 +10,22 @@ import {
 } from "./rooms";
 
 type WsMessage =
-  | { type: "create-room" }
+  | { type: "create-room"; mode?: "mp3" | "spotify" }
   | { type: "join-room"; code: string }
   | { type: "play"; startAt: number }
   | { type: "pause" }
-  | { type: "seek"; position: number };
+  | { type: "seek"; position: number }
+  | {
+      type: "spotify-play";
+      trackUri: string;
+      trackName: string;
+      artistName: string;
+      albumArt: string;
+      positionMs: number;
+      startAt: number;
+    }
+  | { type: "spotify-pause" }
+  | { type: "spotify-seek"; positionMs: number };
 
 function send(ws: WebSocket, data: object) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -41,11 +52,12 @@ export function setupWebSocket(server: Server) {
 
       if (msg.type === "create-room") {
         const code = generateRoomCode();
-        createRoom(code, ws);
+        const mode = msg.mode ?? "mp3";
+        createRoom(code, ws, mode);
         myRoomCode = code;
         myRole = "host";
-        send(ws, { type: "room-created", code });
-        logger.info({ code }, "Room created");
+        send(ws, { type: "room-created", code, mode });
+        logger.info({ code, mode }, "Room created");
         return;
       }
 
@@ -63,13 +75,21 @@ export function setupWebSocket(server: Server) {
         myRoomCode = msg.code;
         myRole = "client";
 
-        send(ws, { type: "joined-room", code: msg.code, hasAudio: !!room.audioData, audioName: room.audioName });
+        send(ws, {
+          type: "joined-room",
+          code: msg.code,
+          mode: room.mode,
+          hasAudio: !!room.audioData,
+          audioName: room.audioName,
+        });
         if (room.host) {
           send(room.host, { type: "client-joined" });
         }
-        logger.info({ code: msg.code }, "Client joined room");
+        logger.info({ code: msg.code, mode: room.mode }, "Client joined room");
         return;
       }
+
+      // ── MP3 playback controls ──────────────────────────────────────────────
 
       if (msg.type === "play") {
         if (!myRoomCode || myRole !== "host") {
@@ -79,9 +99,7 @@ export function setupWebSocket(server: Server) {
         const room = getRoom(myRoomCode);
         if (!room) return;
         const startAt = msg.startAt ?? Date.now() + 500;
-        if (room.client) {
-          send(room.client, { type: "play", startAt });
-        }
+        if (room.client) send(room.client, { type: "play", startAt });
         send(ws, { type: "play", startAt });
         return;
       }
@@ -93,9 +111,7 @@ export function setupWebSocket(server: Server) {
         }
         const room = getRoom(myRoomCode);
         if (!room) return;
-        if (room.client) {
-          send(room.client, { type: "pause" });
-        }
+        if (room.client) send(room.client, { type: "pause" });
         send(ws, { type: "pause" });
         return;
       }
@@ -104,9 +120,48 @@ export function setupWebSocket(server: Server) {
         if (!myRoomCode || myRole !== "host") return;
         const room = getRoom(myRoomCode);
         if (!room) return;
-        if (room.client) {
-          send(room.client, { type: "seek", position: msg.position });
+        if (room.client) send(room.client, { type: "seek", position: msg.position });
+        return;
+      }
+
+      // ── Spotify controls ───────────────────────────────────────────────────
+
+      if (msg.type === "spotify-play") {
+        if (!myRoomCode || myRole !== "host") {
+          send(ws, { type: "error", message: "Only host can send spotify-play" });
+          return;
         }
+        const room = getRoom(myRoomCode);
+        if (!room) return;
+        const payload = {
+          type: "spotify-play",
+          trackUri: msg.trackUri,
+          trackName: msg.trackName,
+          artistName: msg.artistName,
+          albumArt: msg.albumArt,
+          positionMs: msg.positionMs,
+          startAt: msg.startAt,
+        };
+        if (room.client) send(room.client, payload);
+        send(ws, payload);
+        logger.info({ trackUri: msg.trackUri }, "Spotify play broadcast");
+        return;
+      }
+
+      if (msg.type === "spotify-pause") {
+        if (!myRoomCode || myRole !== "host") return;
+        const room = getRoom(myRoomCode);
+        if (!room) return;
+        if (room.client) send(room.client, { type: "spotify-pause" });
+        send(ws, { type: "spotify-pause" });
+        return;
+      }
+
+      if (msg.type === "spotify-seek") {
+        if (!myRoomCode || myRole !== "host") return;
+        const room = getRoom(myRoomCode);
+        if (!room) return;
+        if (room.client) send(room.client, { type: "spotify-seek", positionMs: msg.positionMs });
         return;
       }
     });

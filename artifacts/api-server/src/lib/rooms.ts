@@ -1,11 +1,14 @@
 import type { WebSocket } from "ws";
 
+export type RoomMode = "mp3" | "spotify";
+
 export interface Room {
   code: string;
   host: WebSocket | null;
   client: WebSocket | null;
   audioData: Buffer | null;
   audioName: string | null;
+  mode: RoomMode;
 }
 
 const rooms = new Map<string, Room>();
@@ -18,8 +21,8 @@ export function generateRoomCode(): string {
   return code;
 }
 
-export function createRoom(code: string, host: WebSocket): Room {
-  const room: Room = { code, host, client: null, audioData: null, audioName: null };
+export function createRoom(code: string, host: WebSocket, mode: RoomMode = "mp3"): Room {
+  const room: Room = { code, host, client: null, audioData: null, audioName: null, mode };
   rooms.set(code, room);
   return room;
 }

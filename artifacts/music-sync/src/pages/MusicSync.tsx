@@ -1,12 +1,22 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Music, Upload, Play, Pause, Wifi, WifiOff, Users, Radio, Copy, Check, Volume2 } from "lucide-react";
+import {
+  Music, Upload, Play, Pause, Wifi, WifiOff, Users, Radio,
+  Copy, Check, Volume2, Search, LogOut, X,
+} from "lucide-react";
+import {
+  startLogin, handleCallback, getStoredToken, getValidToken, clearTokens,
+  loadSpotifySdk, createSpotifyPlayer, searchTracks, playTrack, pauseTrack,
+  formatMs,
+  type SpotifyTrack, type SpotifyPlayer,
+} from "../lib/spotify";
 
 type Phase = "idle" | "creating" | "hosting" | "joining" | "joined";
 type ConnectionStatus = "disconnected" | "connecting" | "connected";
+type RoomMode = "mp3" | "spotify";
 
 type WsEvent =
-  | { type: "room-created"; code: string }
-  | { type: "joined-room"; code: string; hasAudio: boolean; audioName: string | null }
+  | { type: "room-created"; code: string; mode: RoomMode }
+  | { type: "joined-room"; code: string; mode: RoomMode; hasAudio: boolean; audioName: string | null }
   | { type: "client-joined" }
   | { type: "client-disconnected" }
   | { type: "host-disconnected" }
@@ -14,6 +24,9 @@ type WsEvent =
   | { type: "play"; startAt: number }
   | { type: "pause" }
   | { type: "seek"; position: number }
+  | { type: "spotify-play"; trackUri: string; trackName: string; artistName: string; albumArt: string; positionMs: number; startAt: number }
+  | { type: "spotify-pause" }
+  | { type: "spotify-seek"; positionMs: number }
   | { type: "error"; message: string };
 
 function getWsUrl() {
@@ -22,28 +35,51 @@ function getWsUrl() {
 }
 
 export default function MusicSync() {
+  // ── Core state ─────────────────────────────────────────────────────────────
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [connStatus, setConnStatus] = useState<ConnectionStatus>("disconnected");
   const [roomCode, setRoomCode] = useState("");
   const [joinCode, setJoinCode] = useState("");
-  const [audioName, setAudioName] = useState<string | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [roomMode, setRoomMode] = useState<RoomMode>("mp3");
+  const [choosingMode, setChoosingMode] = useState(false);
   const [clientConnected, setClientConnected] = useState(false);
   const [hostDisconnected, setHostDisconnected] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // ── Auto-action after OAuth redirect ──────────────────────────────────────
+  const [autoAction, setAutoAction] = useState<
+    { type: "host"; mode: RoomMode } | { type: "join"; code: string } | null
+  >(null);
+
+  // ── MP3 state ──────────────────────────────────────────────────────────────
+  const [audioName, setAudioName] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [audioTime, setAudioTime] = useState(0);
   const [audioDuration, setAudioDuration] = useState(0);
   const [audioLoading, setAudioLoading] = useState(false);
 
+  // ── Spotify state ──────────────────────────────────────────────────────────
+  const [spotifyToken, setSpotifyToken] = useState<string | null>(null);
+  const [spotifyDeviceId, setSpotifyDeviceId] = useState<string | null>(null);
+  const [spotifyReady, setSpotifyReady] = useState(false);
+  const [spotifyError, setSpotifyError] = useState<string | null>(null);
+  const [spotifyPlaying, setSpotifyPlaying] = useState(false);
+  const [nowPlaying, setNowPlaying] = useState<{
+    uri: string; name: string; artist: string; albumArt: string;
+  } | null>(null);
+  const [trackSearch, setTrackSearch] = useState("");
+  const [searchResults, setSearchResults] = useState<SpotifyTrack[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [selectedTrack, setSelectedTrack] = useState<SpotifyTrack | null>(null);
+
+  // ── Refs ───────────────────────────────────────────────────────────────────
   const wsRef = useRef<WebSocket | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const myRoomCodeRef = useRef<string>("");
   const myPhaseRef = useRef<Phase>("idle");
-
-  // Web Audio API refs — the only reliable way to play audio from WS callbacks on iOS
   const audioCtxRef = useRef<AudioContext | null>(null);
   const audioBufferRef = useRef<AudioBuffer | null>(null);
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
@@ -51,19 +87,31 @@ export default function MusicSync() {
   const playbackOffsetRef = useRef<number>(0);
   const rafRef = useRef<number>(0);
   const isPlayingRef = useRef(false);
+  const spotifyPlayerRef = useRef<SpotifyPlayer | null>(null);
+  const spotifyDeviceIdRef = useRef<string | null>(null);
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSpotifyPlayRef = useRef<{ uri: string; positionMs: number; startAt: number } | null>(null);
 
+  // ── Helpers ────────────────────────────────────────────────────────────────
   const send = useCallback((data: object) => {
     const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(data));
-    }
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
   }, []);
 
-  // ─── Audio helpers ───────────────────────────────────────────────────────
+  const showError = useCallback((msg: string) => {
+    setErrorMsg(msg);
+    setTimeout(() => setErrorMsg(null), 4000);
+  }, []);
 
-  const stopTracking = () => {
-    cancelAnimationFrame(rafRef.current);
+  const fmt = (t: number) => {
+    if (!isFinite(t)) return "0:00";
+    const m = Math.floor(t / 60);
+    const s = Math.floor(t % 60);
+    return `${m}:${s.toString().padStart(2, "0")}`;
   };
+
+  // ── MP3 audio helpers ──────────────────────────────────────────────────────
+  const stopTracking = () => cancelAnimationFrame(rafRef.current);
 
   const startTracking = (ctx: AudioContext, startCtxTime: number, offset: number, duration: number) => {
     stopTracking();
@@ -106,44 +154,30 @@ export default function MusicSync() {
     const ctx = audioCtxRef.current;
     const buffer = audioBufferRef.current;
     if (!ctx || !buffer) return;
-
-    // Stop existing playback
     try { sourceNodeRef.current?.stop(); } catch { /* already stopped */ }
-
     const offset = offsetSeconds ?? playbackOffsetRef.current;
     playbackOffsetRef.current = offset;
-
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(ctx.destination);
-
     const delaySeconds = (startAtMs - Date.now()) / 1000;
     const startCtxTime = ctx.currentTime + Math.max(delaySeconds, 0);
-
     source.start(startCtxTime, offset);
     sourceNodeRef.current = source;
     playbackStartCtxTimeRef.current = startCtxTime;
     isPlayingRef.current = true;
     setIsPlaying(true);
-
     source.onended = () => {
-      if (isPlayingRef.current) {
-        isPlayingRef.current = false;
-        setIsPlaying(false);
-        stopTracking();
-      }
+      if (isPlayingRef.current) { isPlayingRef.current = false; setIsPlaying(false); stopTracking(); }
     };
-
     startTracking(ctx, startCtxTime, offset, buffer.duration);
   }, []);
 
   const pauseNow = useCallback(() => {
     const ctx = audioCtxRef.current;
     if (!ctx || !sourceNodeRef.current) return;
-
     const pos = playbackOffsetRef.current + (ctx.currentTime - playbackStartCtxTimeRef.current);
     playbackOffsetRef.current = Math.max(0, pos);
-
     try { sourceNodeRef.current.stop(); } catch { /* already stopped */ }
     isPlayingRef.current = false;
     setIsPlaying(false);
@@ -153,14 +187,47 @@ export default function MusicSync() {
   const seekTo = useCallback((pos: number) => {
     playbackOffsetRef.current = pos;
     setAudioTime(pos);
-    if (isPlayingRef.current) {
-      // Restart from new position immediately
-      playNow(Date.now(), pos);
-    }
+    if (isPlayingRef.current) playNow(Date.now(), pos);
   }, [playNow]);
 
-  // ─── WebSocket ────────────────────────────────────────────────────────────
+  // ── Spotify helpers ────────────────────────────────────────────────────────
+  const execSpotifyPlay = useCallback(async (uri: string, positionMs: number, startAt: number) => {
+    const delay = startAt - Date.now();
+    const deviceId = spotifyDeviceIdRef.current;
 
+    if (!deviceId) {
+      pendingSpotifyPlayRef.current = { uri, positionMs, startAt };
+      return;
+    }
+
+    const doPlay = async () => {
+      const token = await getValidToken();
+      if (!token || !spotifyDeviceIdRef.current) return;
+      await playTrack(token, spotifyDeviceIdRef.current, uri, positionMs);
+      setSpotifyPlaying(true);
+    };
+
+    if (delay > 150) {
+      setTimeout(doPlay, delay - 100);
+    } else {
+      await doPlay();
+    }
+  }, []);
+
+  const execSpotifyPause = useCallback(async () => {
+    const token = await getValidToken();
+    const deviceId = spotifyDeviceIdRef.current;
+    if (!token || !deviceId) return;
+    await pauseTrack(token, deviceId);
+    setSpotifyPlaying(false);
+  }, []);
+
+  const execSpotifySeek = useCallback(async (positionMs: number) => {
+    const player = spotifyPlayerRef.current;
+    if (player) await player.seek(positionMs);
+  }, []);
+
+  // ── WebSocket ──────────────────────────────────────────────────────────────
   const connectWs = useCallback(() => {
     setConnStatus("connecting");
     const ws = new WebSocket(getWsUrl());
@@ -176,78 +243,209 @@ export default function MusicSync() {
       if (msg.type === "room-created") {
         setRoomCode(msg.code);
         myRoomCodeRef.current = msg.code;
+        setRoomMode(msg.mode);
+        setChoosingMode(false);
         setPhase("hosting");
         myPhaseRef.current = "hosting";
 
       } else if (msg.type === "joined-room") {
         setRoomCode(msg.code);
         myRoomCodeRef.current = msg.code;
+        setRoomMode(msg.mode);
         setPhase("joined");
         myPhaseRef.current = "joined";
-        if (msg.hasAudio && msg.audioName) {
+        if (msg.mode === "mp3" && msg.hasAudio && msg.audioName) {
           setAudioName(msg.audioName);
           loadAudioFromUrl(`/api/rooms/${msg.code}/audio`);
         }
 
       } else if (msg.type === "client-joined") {
         setClientConnected(true);
-
       } else if (msg.type === "client-disconnected") {
         setClientConnected(false);
-
       } else if (msg.type === "host-disconnected") {
         setHostDisconnected(true);
-        pauseNow();
+        if (roomMode === "mp3") pauseNow();
+        else { setSpotifyPlaying(false); setNowPlaying(null); }
 
       } else if (msg.type === "audio-ready") {
         setAudioName(msg.audioName);
         loadAudioFromUrl(`/api/rooms/${myRoomCodeRef.current}/audio`);
 
       } else if (msg.type === "play") {
-        // Web Audio API schedules with precision — works from WS callback on iOS
         playNow(msg.startAt);
-
       } else if (msg.type === "pause") {
         pauseNow();
-
       } else if (msg.type === "seek") {
         seekTo(msg.position);
 
+      } else if (msg.type === "spotify-play") {
+        setNowPlaying({ uri: msg.trackUri, name: msg.trackName, artist: msg.artistName, albumArt: msg.albumArt });
+        setSpotifyPlaying(true);
+        execSpotifyPlay(msg.trackUri, msg.positionMs, msg.startAt);
+
+      } else if (msg.type === "spotify-pause") {
+        execSpotifyPause();
+      } else if (msg.type === "spotify-seek") {
+        execSpotifySeek(msg.positionMs);
+
       } else if (msg.type === "error") {
-        setErrorMsg((msg as { type: "error"; message: string }).message);
-        setTimeout(() => setErrorMsg(null), 3000);
+        showError((msg as { type: "error"; message: string }).message);
       }
     };
 
     ws.onclose = () => setConnStatus("disconnected");
     ws.onerror = () => setConnStatus("disconnected");
-  }, [loadAudioFromUrl, pauseNow, playNow, seekTo]);
+  }, [loadAudioFromUrl, pauseNow, playNow, seekTo, execSpotifyPlay, execSpotifyPause, execSpotifySeek, showError, roomMode]);
 
+  // ── Mount: connect WS ──────────────────────────────────────────────────────
   useEffect(() => {
     connectWs();
-    return () => {
-      wsRef.current?.close();
-      stopTracking();
-    };
+    return () => { wsRef.current?.close(); stopTracking(); };
   }, [connectWs]);
 
-  // ─── Handlers ─────────────────────────────────────────────────────────────
+  // ── Mount: handle Spotify OAuth callback or stored token ───────────────────
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("code")) {
+      handleCallback().then((result) => {
+        if (!result) return;
+        setSpotifyToken(result.token);
+        if (result.pendingAction === "host") {
+          setAutoAction({ type: "host", mode: "spotify" });
+        } else if (result.pendingAction === "join" && result.pendingCode) {
+          setJoinCode(result.pendingCode);
+          setAutoAction({ type: "join", code: result.pendingCode });
+          setPhase("joining");
+        }
+      });
+    } else {
+      const stored = getStoredToken();
+      if (stored) setSpotifyToken(stored);
+    }
+  }, []);
 
-  const handleEnableAudio = () => {
-    const ctx = new AudioContext();
-    audioCtxRef.current = ctx;
-    // Play a 1-frame silent buffer to fully unlock the AudioContext on iOS
-    const buf = ctx.createBuffer(1, 1, 22050);
-    const src = ctx.createBufferSource();
-    src.buffer = buf;
-    src.connect(ctx.destination);
-    src.start(0);
-    ctx.resume().then(() => setAudioEnabled(true));
+  // ── Execute auto-action once WS is connected ───────────────────────────────
+  useEffect(() => {
+    if (connStatus !== "connected" || !autoAction) return;
+    if (autoAction.type === "host") {
+      send({ type: "create-room", mode: autoAction.mode });
+    } else {
+      send({ type: "join-room", code: autoAction.code });
+    }
+    setAutoAction(null);
+  }, [connStatus, autoAction, send]);
+
+  // ── Init Spotify SDK when token is available and audio enabled ─────────────
+  useEffect(() => {
+    if (!spotifyToken || !audioEnabled) return;
+    let mounted = true;
+
+    const init = async () => {
+      try {
+        await loadSpotifySdk();
+        if (!mounted) return;
+
+        const player = createSpotifyPlayer(async () => {
+          const t = await getValidToken();
+          return t ?? "";
+        });
+
+        player.addListener("ready", (data: unknown) => {
+          if (!mounted) return;
+          const { device_id } = data as { device_id: string };
+          spotifyDeviceIdRef.current = device_id;
+          setSpotifyDeviceId(device_id);
+          setSpotifyReady(true);
+          spotifyPlayerRef.current = player;
+
+          const pending = pendingSpotifyPlayRef.current;
+          if (pending) {
+            pendingSpotifyPlayRef.current = null;
+            execSpotifyPlay(pending.uri, pending.positionMs, pending.startAt);
+          }
+        });
+
+        player.addListener("not_ready", () => {
+          if (!mounted) return;
+          spotifyDeviceIdRef.current = null;
+          setSpotifyDeviceId(null);
+          setSpotifyReady(false);
+        });
+
+        player.addListener("initialization_error", (data: unknown) => {
+          const { message } = data as { message: string };
+          setSpotifyError(message.includes("premium")
+            ? "Spotify Premium is required for playback."
+            : `Player error: ${message}`);
+        });
+
+        player.addListener("authentication_error", () => {
+          clearTokens();
+          setSpotifyToken(null);
+          setSpotifyError("Spotify session expired. Please log in again.");
+        });
+
+        player.addListener("account_error", () => {
+          setSpotifyError("Spotify Premium is required for in-browser playback.");
+        });
+
+        player.addListener("player_state_changed", (state: unknown) => {
+          if (!state) return;
+          const s = state as { paused: boolean };
+          setSpotifyPlaying(!s.paused);
+        });
+
+        await player.connect();
+      } catch (err) {
+        console.error("Spotify SDK init error:", err);
+      }
+    };
+
+    init();
+    return () => {
+      mounted = false;
+      spotifyPlayerRef.current?.disconnect();
+      spotifyPlayerRef.current = null;
+      spotifyDeviceIdRef.current = null;
+      setSpotifyReady(false);
+      setSpotifyDeviceId(null);
+    };
+  }, [spotifyToken, audioEnabled, execSpotifyPlay]);
+
+  // ── Search debounce ────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!trackSearch.trim() || !spotifyToken) { setSearchResults([]); return; }
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const token = await getValidToken();
+        if (!token) return;
+        const results = await searchTracks(token, trackSearch);
+        setSearchResults(results);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 400);
+    return () => { if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current); };
+  }, [trackSearch, spotifyToken]);
+
+  // ── Handlers: room creation ────────────────────────────────────────────────
+  const handleCreateMp3Room = () => {
+    if (connStatus !== "connected") return;
+    setChoosingMode(false);
+    send({ type: "create-room", mode: "mp3" });
   };
 
-  const handleCreateRoom = () => {
+  const handleCreateSpotifyRoom = () => {
+    if (!spotifyToken) {
+      startLogin("host");
+      return;
+    }
     if (connStatus !== "connected") return;
-    send({ type: "create-room" });
+    setChoosingMode(false);
+    send({ type: "create-room", mode: "spotify" });
   };
 
   const handleJoinRoom = () => {
@@ -256,13 +454,12 @@ export default function MusicSync() {
     send({ type: "join-room", code: joinCode });
   };
 
+  // ── Handlers: MP3 ─────────────────────────────────────────────────────────
   const handleFileUpload = async (file: File) => {
     if (!file || !myRoomCodeRef.current) return;
     setUploadProgress(0);
-
     const formData = new FormData();
     formData.append("audio", file);
-
     const xhr = new XMLHttpRequest();
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) setUploadProgress(Math.round((e.loaded / e.total) * 100));
@@ -275,28 +472,55 @@ export default function MusicSync() {
         await loadAudioFromUrl(`/api/rooms/${myRoomCodeRef.current}/audio`);
       }
     };
-    xhr.onerror = () => {
-      setUploadProgress(null);
-      setErrorMsg("Upload failed");
-      setTimeout(() => setErrorMsg(null), 3000);
-    };
+    xhr.onerror = () => { setUploadProgress(null); showError("Upload failed"); };
     xhr.open("POST", `/api/rooms/${myRoomCodeRef.current}/audio`);
     xhr.send(formData);
   };
 
-  const handlePlay = () => {
+  const handleMp3Play = () => {
     if (!audioBufferRef.current) return;
     const startAt = Date.now() + 300;
     send({ type: "play", startAt });
   };
 
-  const handlePause = () => {
-    send({ type: "pause" });
-  };
+  const handleMp3Pause = () => send({ type: "pause" });
 
   const handleSeek = (pos: number) => {
     seekTo(pos);
     send({ type: "seek", position: pos });
+  };
+
+  // ── Handlers: Spotify ──────────────────────────────────────────────────────
+  const handleSpotifyPlay = () => {
+    if (!selectedTrack) return;
+    const startAt = Date.now() + 1500;
+    const track = selectedTrack;
+    const payload = {
+      type: "spotify-play",
+      trackUri: track.uri,
+      trackName: track.name,
+      artistName: track.artists[0]?.name ?? "",
+      albumArt: track.album.images[0]?.url ?? "",
+      positionMs: 0,
+      startAt,
+    };
+    send(payload);
+    setNowPlaying({ uri: track.uri, name: track.name, artist: track.artists[0]?.name ?? "", albumArt: track.album.images[0]?.url ?? "" });
+  };
+
+  const handleSpotifyPause = () => send({ type: "spotify-pause" });
+
+  const handleSpotifyLoginForJoin = () => {
+    startLogin("join", myRoomCodeRef.current || joinCode);
+  };
+
+  const handleLogout = () => {
+    clearTokens();
+    setSpotifyToken(null);
+    setSpotifyReady(false);
+    setNowPlaying(null);
+    setSelectedTrack(null);
+    setSearchResults([]);
   };
 
   const copyCode = () => {
@@ -306,15 +530,18 @@ export default function MusicSync() {
     });
   };
 
-  const fmt = (t: number) => {
-    if (!isFinite(t)) return "0:00";
-    const m = Math.floor(t / 60);
-    const s = Math.floor(t % 60);
-    return `${m}:${s.toString().padStart(2, "0")}`;
+  const handleEnableAudio = () => {
+    const ctx = new AudioContext();
+    audioCtxRef.current = ctx;
+    const buf = ctx.createBuffer(1, 1, 22050);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(0);
+    ctx.resume().then(() => setAudioEnabled(true));
   };
 
-  // ─── "Tap to Enable Audio" gate ──────────────────────────────────────────
-
+  // ── "Tap to Enable Audio" gate ────────────────────────────────────────────
   if (!audioEnabled) {
     return (
       <div className="min-h-screen bg-background flex flex-col items-center justify-center p-4">
@@ -329,7 +556,6 @@ export default function MusicSync() {
             <h1 className="text-3xl font-bold tracking-tight text-foreground">SyncWave</h1>
             <p className="text-muted-foreground text-sm">Synchronized music playback across devices</p>
           </div>
-
           <button
             onClick={handleEnableAudio}
             className="group flex flex-col items-center gap-4 w-56 py-8 px-6 rounded-2xl bg-primary/10 border-2 border-primary/40 hover:bg-primary/20 hover:border-primary/70 active:scale-95 transition-all"
@@ -344,15 +570,68 @@ export default function MusicSync() {
               </p>
             </div>
           </button>
-
           <p className="text-xs text-muted-foreground/60">Tap once — no permissions needed</p>
         </div>
       </div>
     );
   }
 
-  // ─── Main app ─────────────────────────────────────────────────────────────
+  // ── Shared room code card ──────────────────────────────────────────────────
+  const RoomCodeCard = () => (
+    <div className="bg-card border border-card-border rounded-2xl p-6 text-center space-y-3 shadow-lg">
+      <div className="flex items-center justify-center gap-2 text-muted-foreground text-xs font-medium uppercase tracking-widest">
+        {roomMode === "spotify"
+          ? <span className="text-[#1DB954]">● Spotify</span>
+          : <><Music className="w-3.5 h-3.5" /> MP3</>
+        }
+        <span>· Room Code</span>
+      </div>
+      <div className="flex items-center justify-center gap-3">
+        <span className="text-5xl font-mono font-bold text-primary tracking-widest">{roomCode}</span>
+        <button onClick={copyCode} className="p-2 rounded-lg bg-secondary hover:bg-accent transition-colors">
+          {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4 text-muted-foreground" />}
+        </button>
+      </div>
+      <p className="text-muted-foreground text-xs">Share this code with the other phone</p>
+      <div className={`flex items-center justify-center gap-2 text-xs font-medium ${clientConnected ? "text-green-400" : "text-muted-foreground"}`}>
+        <Users className="w-3.5 h-3.5" />
+        {clientConnected ? "Listener connected" : "Waiting for listener..."}
+      </div>
+    </div>
+  );
 
+  // ── Spotify: SDK status badge ──────────────────────────────────────────────
+  const SpotifyStatus = () => (
+    <div className={`flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-lg w-fit
+      ${spotifyReady ? "bg-[#1DB954]/20 text-[#1DB954]" : "bg-secondary text-muted-foreground"}`}>
+      <span className={`w-2 h-2 rounded-full ${spotifyReady ? "bg-[#1DB954]" : "bg-muted-foreground"}`} />
+      {spotifyReady ? "Spotify player ready" : spotifyDeviceId ? "Connecting…" : "Initializing Spotify…"}
+    </div>
+  );
+
+  // ── Spotify: now playing card ──────────────────────────────────────────────
+  const NowPlayingCard = ({ track }: { track: { name: string; artist: string; albumArt: string } }) => (
+    <div className="flex items-center gap-3 bg-[#1DB954]/10 border border-[#1DB954]/30 rounded-xl p-3">
+      {track.albumArt
+        ? <img src={track.albumArt} alt="album art" className="w-12 h-12 rounded-lg object-cover flex-shrink-0" />
+        : <div className="w-12 h-12 rounded-lg bg-secondary flex items-center justify-center flex-shrink-0"><Music className="w-5 h-5 text-muted-foreground" /></div>
+      }
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold truncate text-foreground">{track.name}</p>
+        <p className="text-xs text-muted-foreground truncate">{track.artist}</p>
+      </div>
+      {spotifyPlaying && (
+        <div className="flex items-end gap-0.5 h-5 flex-shrink-0">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="w-1 bg-[#1DB954] rounded-full animate-pulse"
+              style={{ height: `${60 + i * 20}%`, animationDelay: `${i * 0.15}s` }} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  // ── Main app ───────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center p-4">
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
@@ -384,7 +663,12 @@ export default function MusicSync() {
             {errorMsg}
           </div>
         )}
-
+        {spotifyError && (
+          <div className="bg-orange-500/20 border border-orange-500/40 rounded-xl px-4 py-3 text-orange-200 text-sm flex items-start gap-2">
+            <span className="flex-1">{spotifyError}</span>
+            <button onClick={() => setSpotifyError(null)}><X className="w-4 h-4 mt-0.5" /></button>
+          </div>
+        )}
         {hostDisconnected && (
           <div className="bg-destructive/20 border border-destructive/40 rounded-xl px-4 py-3 text-destructive-foreground text-sm text-center">
             Host disconnected. Session ended.
@@ -392,12 +676,12 @@ export default function MusicSync() {
         )}
 
         {/* ── IDLE ── */}
-        {phase === "idle" && (
+        {phase === "idle" && !choosingMode && (
           <div className="bg-card border border-card-border rounded-2xl p-6 space-y-4 shadow-lg">
             <h2 className="text-lg font-semibold text-center">Get Started</h2>
             <div className="space-y-3">
               <button
-                onClick={handleCreateRoom}
+                onClick={() => setChoosingMode(true)}
                 disabled={connStatus !== "connected"}
                 className="w-full py-3 px-4 rounded-xl bg-primary text-primary-foreground font-semibold text-sm hover:opacity-90 active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
               >
@@ -410,10 +694,7 @@ export default function MusicSync() {
               </div>
               <div className="flex gap-2">
                 <input
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={4}
-                  placeholder="4-digit code"
+                  type="text" inputMode="numeric" maxLength={4} placeholder="4-digit code"
                   value={joinCode}
                   onChange={(e) => setJoinCode(e.target.value.replace(/\D/g, "").slice(0, 4))}
                   onKeyDown={(e) => e.key === "Enter" && handleJoinRoom()}
@@ -431,34 +712,62 @@ export default function MusicSync() {
           </div>
         )}
 
+        {/* ── MODE SELECTION ── */}
+        {phase === "idle" && choosingMode && (
+          <div className="bg-card border border-card-border rounded-2xl p-6 space-y-4 shadow-lg">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Choose Music Source</h2>
+              <button onClick={() => setChoosingMode(false)} className="text-muted-foreground hover:text-foreground transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <button
+              onClick={handleCreateMp3Room}
+              className="w-full flex items-center gap-4 p-4 rounded-xl border-2 border-border hover:border-primary/50 hover:bg-accent/30 active:scale-[0.98] transition-all text-left"
+            >
+              <div className="w-12 h-12 rounded-xl bg-primary/20 flex items-center justify-center flex-shrink-0">
+                <Upload className="w-6 h-6 text-primary" />
+              </div>
+              <div>
+                <p className="font-semibold text-sm">MP3 Upload</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Upload a file · perfect sync via Web Audio API</p>
+              </div>
+            </button>
+
+            <button
+              onClick={handleCreateSpotifyRoom}
+              className="w-full flex items-center gap-4 p-4 rounded-xl border-2 border-[#1DB954]/30 hover:border-[#1DB954]/70 hover:bg-[#1DB954]/5 active:scale-[0.98] transition-all text-left"
+            >
+              <div className="w-12 h-12 rounded-xl bg-[#1DB954]/20 flex items-center justify-center flex-shrink-0">
+                <svg className="w-6 h-6" viewBox="0 0 24 24" fill="#1DB954">
+                  <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/>
+                </svg>
+              </div>
+              <div>
+                <p className="font-semibold text-sm">Spotify Connect</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {spotifyToken ? "Logged in · search & sync any track" : "Requires Premium · tap to log in"}
+                </p>
+              </div>
+            </button>
+          </div>
+        )}
+
         {/* ── JOINING ── */}
         {phase === "joining" && (
           <div className="bg-card border border-card-border rounded-2xl p-6 text-center space-y-3">
             <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
-            <p className="text-muted-foreground text-sm">Joining room...</p>
+            <p className="text-muted-foreground text-sm">
+              {autoAction ? "Rejoining room after Spotify login…" : "Joining room..."}
+            </p>
           </div>
         )}
 
-        {/* ── HOSTING ── */}
-        {phase === "hosting" && (
+        {/* ── HOSTING: MP3 ── */}
+        {phase === "hosting" && roomMode === "mp3" && (
           <div className="space-y-4">
-            {/* Room code */}
-            <div className="bg-card border border-card-border rounded-2xl p-6 text-center space-y-3 shadow-lg">
-              <div className="flex items-center justify-center gap-2 text-muted-foreground text-xs font-medium uppercase tracking-widest">
-                <Music className="w-3.5 h-3.5" /> Room Code
-              </div>
-              <div className="flex items-center justify-center gap-3">
-                <span className="text-5xl font-mono font-bold text-primary tracking-widest">{roomCode}</span>
-                <button onClick={copyCode} className="p-2 rounded-lg bg-secondary hover:bg-accent transition-colors">
-                  {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4 text-muted-foreground" />}
-                </button>
-              </div>
-              <p className="text-muted-foreground text-xs">Share this code with the other phone</p>
-              <div className={`flex items-center justify-center gap-2 text-xs font-medium ${clientConnected ? "text-green-400" : "text-muted-foreground"}`}>
-                <Users className="w-3.5 h-3.5" />
-                {clientConnected ? "Listener connected" : "Waiting for listener..."}
-              </div>
-            </div>
+            <RoomCodeCard />
 
             {/* Upload */}
             <div className="bg-card border border-card-border rounded-2xl p-6 space-y-3 shadow-lg">
@@ -512,124 +821,255 @@ export default function MusicSync() {
               )}
             </div>
 
-            {/* Playback */}
+            {/* MP3 Playback */}
             {audioName && !audioLoading && (
               <div className="bg-card border border-card-border rounded-2xl p-6 space-y-4 shadow-lg">
                 <h3 className="text-sm font-semibold">Synchronized Playback</h3>
-
                 {audioDuration > 0 && (
                   <div className="space-y-1">
-                    <input
-                      type="range" min={0} max={audioDuration} step={0.5} value={audioTime}
+                    <input type="range" min={0} max={audioDuration} step={0.5} value={audioTime}
                       onChange={(e) => handleSeek(Number(e.target.value))}
-                      className="w-full accent-primary cursor-pointer"
-                    />
+                      className="w-full accent-primary cursor-pointer" />
                     <div className="flex justify-between text-xs text-muted-foreground">
                       <span>{fmt(audioTime)}</span><span>{fmt(audioDuration)}</span>
                     </div>
                   </div>
                 )}
-
                 <div className="flex items-center justify-center">
                   {!isPlaying ? (
-                    <button
-                      onClick={handlePlay}
-                      className="flex items-center gap-2 px-8 py-3.5 rounded-xl bg-primary text-primary-foreground font-semibold hover:opacity-90 active:scale-[0.97] transition-all shadow-lg"
-                    >
-                      <Play className="w-5 h-5 fill-current" />
-                      Play on all devices
+                    <button onClick={handleMp3Play}
+                      className="flex items-center gap-2 px-8 py-3.5 rounded-xl bg-primary text-primary-foreground font-semibold hover:opacity-90 active:scale-[0.97] transition-all shadow-lg">
+                      <Play className="w-5 h-5 fill-current" /> Play on all devices
                     </button>
                   ) : (
-                    <button
-                      onClick={handlePause}
-                      className="flex items-center gap-2 px-8 py-3.5 rounded-xl bg-secondary text-secondary-foreground font-semibold hover:bg-accent active:scale-[0.97] transition-all shadow-lg"
-                    >
-                      <Pause className="w-5 h-5 fill-current" />
-                      Pause
+                    <button onClick={handleMp3Pause}
+                      className="flex items-center gap-2 px-8 py-3.5 rounded-xl bg-secondary text-secondary-foreground font-semibold hover:bg-accent active:scale-[0.97] transition-all">
+                      <Pause className="w-5 h-5 fill-current" /> Pause
                     </button>
                   )}
                 </div>
-
-                {!clientConnected && (
-                  <p className="text-xs text-center text-muted-foreground">Playback syncs when a listener joins</p>
-                )}
               </div>
             )}
           </div>
         )}
 
-        {/* ── JOINED ── */}
+        {/* ── HOSTING: Spotify ── */}
+        {phase === "hosting" && roomMode === "spotify" && (
+          <div className="space-y-4">
+            <RoomCodeCard />
+
+            <div className="bg-card border border-card-border rounded-2xl p-6 space-y-4 shadow-lg">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Spotify Sync</h3>
+                <div className="flex items-center gap-2">
+                  <SpotifyStatus />
+                  <button onClick={handleLogout} className="p-1.5 rounded-lg hover:bg-secondary transition-colors" title="Log out of Spotify">
+                    <LogOut className="w-3.5 h-3.5 text-muted-foreground" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Now playing / track selector */}
+              {nowPlaying && (
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground font-medium">Now Syncing</p>
+                  <NowPlayingCard track={nowPlaying} />
+                </div>
+              )}
+
+              {/* Track search */}
+              <div className="space-y-2">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <input
+                    type="text" placeholder="Search Spotify..."
+                    value={trackSearch}
+                    onChange={(e) => setTrackSearch(e.target.value)}
+                    className="w-full bg-input border border-border rounded-xl pl-9 pr-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                  {isSearching && (
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 border border-primary border-t-transparent rounded-full animate-spin" />
+                  )}
+                </div>
+
+                {searchResults.length > 0 && (
+                  <div className="space-y-1 max-h-48 overflow-y-auto rounded-xl border border-border bg-input/30">
+                    {searchResults.map((track) => (
+                      <button
+                        key={track.id}
+                        onClick={() => { setSelectedTrack(track); setSearchResults([]); setTrackSearch(""); }}
+                        className={`w-full flex items-center gap-3 p-3 hover:bg-accent/50 transition-colors text-left ${selectedTrack?.id === track.id ? "bg-accent/50" : ""}`}
+                      >
+                        {track.album.images[0]?.url
+                          ? <img src={track.album.images[0].url} alt="" className="w-9 h-9 rounded flex-shrink-0" />
+                          : <div className="w-9 h-9 rounded bg-secondary flex-shrink-0" />
+                        }
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{track.name}</p>
+                          <p className="text-xs text-muted-foreground truncate">{track.artists.map(a => a.name).join(", ")} · {formatMs(track.duration_ms)}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {selectedTrack && searchResults.length === 0 && (
+                  <div className="flex items-center gap-3 bg-accent/30 rounded-xl p-3">
+                    {selectedTrack.album.images[0]?.url
+                      ? <img src={selectedTrack.album.images[0].url} alt="" className="w-9 h-9 rounded flex-shrink-0" />
+                      : <div className="w-9 h-9 rounded bg-secondary flex-shrink-0" />
+                    }
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{selectedTrack.name}</p>
+                      <p className="text-xs text-muted-foreground truncate">{selectedTrack.artists.map(a => a.name).join(", ")}</p>
+                    </div>
+                    <button onClick={() => setSelectedTrack(null)} className="text-muted-foreground hover:text-foreground transition-colors">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Play / Pause */}
+              <div className="flex items-center justify-center">
+                {!spotifyPlaying ? (
+                  <button
+                    onClick={handleSpotifyPlay}
+                    disabled={!selectedTrack || !spotifyReady}
+                    className="flex items-center gap-2 px-8 py-3.5 rounded-xl bg-[#1DB954] text-black font-semibold hover:opacity-90 active:scale-[0.97] transition-all shadow-lg disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Play className="w-5 h-5 fill-current" />
+                    {selectedTrack ? "Play on all devices" : "Search for a track"}
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleSpotifyPause}
+                    className="flex items-center gap-2 px-8 py-3.5 rounded-xl bg-secondary text-secondary-foreground font-semibold hover:bg-accent active:scale-[0.97] transition-all"
+                  >
+                    <Pause className="w-5 h-5 fill-current" /> Pause
+                  </button>
+                )}
+              </div>
+
+              {!spotifyReady && (
+                <p className="text-xs text-muted-foreground text-center">
+                  Waiting for Spotify player to initialize…
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── JOINED (listener) ── */}
         {phase === "joined" && (
           <div className="space-y-4">
             <div className="bg-card border border-card-border rounded-2xl p-6 text-center space-y-3 shadow-lg">
-              <div className="flex items-center justify-center gap-2 text-green-400 text-xs font-medium uppercase tracking-widest">
-                <Wifi className="w-3.5 h-3.5" /> Listening in Room
+              <div className="flex items-center justify-center gap-2 text-muted-foreground text-xs font-medium uppercase tracking-widest">
+                {roomMode === "spotify" ? <span className="text-[#1DB954]">● Spotify Room</span> : <><Music className="w-3.5 h-3.5" /> MP3 Room</>}
               </div>
-              <span className="text-4xl font-mono font-bold text-primary tracking-widest">{roomCode}</span>
+              <div className="text-4xl font-mono font-bold text-primary tracking-widest">{roomCode}</div>
+              <div className="flex items-center justify-center gap-2 text-xs font-medium text-green-400">
+                <Wifi className="w-3.5 h-3.5" /> Synced with host
+              </div>
             </div>
 
-            <div className="bg-card border border-card-border rounded-2xl p-6 space-y-4 shadow-lg">
-              {!audioName ? (
-                <div className="text-center py-4 space-y-3">
-                  <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
-                    <Music className="w-6 h-6 text-primary/50" />
+            {/* MP3 listener */}
+            {roomMode === "mp3" && (
+              <div className="bg-card border border-card-border rounded-2xl p-6 space-y-3 shadow-lg">
+                {audioLoading ? (
+                  <div className="flex flex-col items-center gap-3 py-4">
+                    <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                    <p className="text-sm text-muted-foreground">Loading audio...</p>
                   </div>
-                  <p className="text-muted-foreground text-sm">Waiting for host to upload audio...</p>
-                  <div className="flex items-center justify-center gap-1">
-                    {[0, 150, 300].map((d) => (
-                      <div key={d} className="w-1.5 h-1.5 rounded-full bg-primary/50 animate-bounce" style={{ animationDelay: `${d}ms` }} />
-                    ))}
-                  </div>
-                </div>
-              ) : audioLoading ? (
-                <div className="text-center py-4 space-y-2">
-                  <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
-                  <p className="text-xs text-muted-foreground">Loading audio...</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3 bg-accent/30 rounded-xl p-3">
-                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 transition-all ${isPlaying ? "bg-primary/30" : "bg-primary/10"}`}>
-                      <Music className={`w-5 h-5 text-primary ${isPlaying ? "animate-pulse" : ""}`} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{audioName}</p>
-                      <p className="text-xs text-muted-foreground">{fmt(audioDuration)}</p>
-                    </div>
-                  </div>
-
-                  {audioDuration > 0 && (
-                    <div className="space-y-1">
-                      <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-primary rounded-full transition-all duration-200"
-                          style={{ width: `${(audioTime / audioDuration) * 100}%` }}
-                        />
+                ) : audioName ? (
+                  <>
+                    <div className="flex items-center gap-3 bg-accent/30 rounded-xl p-3">
+                      <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center flex-shrink-0">
+                        <Music className="w-5 h-5 text-primary" />
                       </div>
-                      <div className="flex justify-between text-xs text-muted-foreground">
-                        <span>{fmt(audioTime)}</span><span>{fmt(audioDuration)}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{audioName}</p>
+                        <p className="text-xs text-muted-foreground">{fmt(audioDuration)}</p>
                       </div>
                     </div>
-                  )}
-
-                  <div className="text-center py-2">
-                    {isPlaying ? (
-                      <div className="flex items-center justify-center gap-2 text-green-400 text-sm font-medium">
-                        <div className="flex items-end gap-0.5 h-4">
-                          {[1, 2, 3, 4].map((i) => (
-                            <div key={i} className="w-1 bg-green-400 rounded-sm animate-bounce"
-                              style={{ height: `${8 + i * 3}px`, animationDelay: `${i * 80}ms` }} />
-                          ))}
+                    {audioDuration > 0 && (
+                      <div className="space-y-1">
+                        <div className="h-1 bg-secondary rounded-full overflow-hidden">
+                          <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${(audioTime / audioDuration) * 100}%` }} />
                         </div>
-                        Now playing
+                        <div className="flex justify-between text-xs text-muted-foreground">
+                          <span>{fmt(audioTime)}</span><span>{fmt(audioDuration)}</span>
+                        </div>
                       </div>
-                    ) : (
-                      <p className="text-muted-foreground text-sm">Waiting for host to press Play...</p>
                     )}
+                    <div className={`text-center text-xs font-medium ${isPlaying ? "text-green-400" : "text-muted-foreground"}`}>
+                      {isPlaying ? "▶ Playing in sync" : "Waiting for host to play..."}
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-center py-6">
+                    <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center mx-auto mb-3">
+                      <Music className="w-5 h-5 text-muted-foreground" />
+                    </div>
+                    <p className="text-sm text-muted-foreground">Waiting for host to upload a track...</p>
                   </div>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            )}
+
+            {/* Spotify listener */}
+            {roomMode === "spotify" && (
+              <div className="bg-card border border-card-border rounded-2xl p-6 space-y-4 shadow-lg">
+                {!spotifyToken ? (
+                  <div className="flex flex-col items-center gap-4 py-4 text-center">
+                    <div className="w-16 h-16 rounded-2xl bg-[#1DB954]/20 flex items-center justify-center">
+                      <svg className="w-8 h-8" viewBox="0 0 24 24" fill="#1DB954">
+                        <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/>
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold">Log in to sync with host</p>
+                      <p className="text-xs text-muted-foreground mt-1">This is a Spotify room · Spotify Premium required</p>
+                    </div>
+                    <button
+                      onClick={handleSpotifyLoginForJoin}
+                      className="px-6 py-3 rounded-xl bg-[#1DB954] text-black font-semibold text-sm hover:opacity-90 active:scale-[0.97] transition-all"
+                    >
+                      Log in with Spotify
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-semibold">Spotify Sync</h3>
+                      <div className="flex items-center gap-2">
+                        <SpotifyStatus />
+                        <button onClick={handleLogout} className="p-1.5 rounded-lg hover:bg-secondary transition-colors" title="Log out">
+                          <LogOut className="w-3.5 h-3.5 text-muted-foreground" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {nowPlaying ? (
+                      <NowPlayingCard track={nowPlaying} />
+                    ) : (
+                      <div className="text-center py-6">
+                        <div className="w-10 h-10 rounded-full bg-[#1DB954]/20 flex items-center justify-center mx-auto mb-3">
+                          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="#1DB954">
+                            <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/>
+                          </svg>
+                        </div>
+                        <p className="text-sm text-muted-foreground">Waiting for host to play a track…</p>
+                      </div>
+                    )}
+
+                    <div className={`text-center text-xs font-medium ${spotifyPlaying ? "text-[#1DB954]" : "text-muted-foreground"}`}>
+                      {spotifyPlaying ? "▶ Playing in sync" : nowPlaying ? "Paused" : ""}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
