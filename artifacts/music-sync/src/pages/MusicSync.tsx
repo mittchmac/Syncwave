@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Music, Upload, Play, Pause, Wifi, WifiOff, Users, Radio, Copy, Check } from "lucide-react";
+import { Music, Upload, Play, Pause, Wifi, WifiOff, Users, Radio, Copy, Check, Volume2 } from "lucide-react";
 
 type Phase =
   | "idle"
@@ -28,6 +28,7 @@ function getWsUrl() {
 }
 
 export default function MusicSync() {
+  const [audioEnabled, setAudioEnabled] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [connStatus, setConnStatus] = useState<ConnectionStatus>("disconnected");
   const [roomCode, setRoomCode] = useState("");
@@ -47,6 +48,18 @@ export default function MusicSync() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const myRoomCodeRef = useRef<string>("");
   const myPhaseRef = useRef<Phase>("idle");
+  const audioCtxRef = useRef<AudioContext | null>(null);
+
+  const handleEnableAudio = () => {
+    const ctx = new AudioContext();
+    audioCtxRef.current = ctx;
+    const buf = ctx.createBuffer(1, 1, 22050);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(0);
+    ctx.resume().then(() => setAudioEnabled(true));
+  };
 
   const send = useCallback((data: object) => {
     const ws = wsRef.current;
@@ -225,6 +238,44 @@ export default function MusicSync() {
   const isHost = phase === "hosting";
   const isGuest = phase === "joined";
   const inRoom = isHost || isGuest;
+
+  if (!audioEnabled) {
+    return (
+      <div className="min-h-screen bg-background flex flex-col items-center justify-center p-4">
+        <div className="fixed inset-0 pointer-events-none overflow-hidden">
+          <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-96 h-96 rounded-full bg-primary/10 blur-3xl" />
+        </div>
+        <div className="relative z-10 flex flex-col items-center gap-8 max-w-xs text-center">
+          <div className="flex flex-col items-center gap-3">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary/20 border border-primary/30">
+              <Radio className="w-8 h-8 text-primary" />
+            </div>
+            <h1 className="text-3xl font-bold tracking-tight text-foreground">SyncWave</h1>
+            <p className="text-muted-foreground text-sm">Synchronized music playback across devices</p>
+          </div>
+
+          <button
+            onClick={handleEnableAudio}
+            className="group relative flex flex-col items-center gap-4 w-56 py-8 px-6 rounded-2xl bg-primary/10 border-2 border-primary/40 hover:bg-primary/20 hover:border-primary/70 active:scale-95 transition-all"
+          >
+            <div className="w-16 h-16 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center group-hover:bg-primary/30 transition-colors">
+              <Volume2 className="w-8 h-8 text-primary" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-base font-semibold text-foreground">Tap to Enable Audio</p>
+              <p className="text-xs text-muted-foreground leading-snug">
+                Required by your browser before<br />synchronized playback can work
+              </p>
+            </div>
+          </button>
+
+          <p className="text-xs text-muted-foreground/60">
+            Tap once — no permissions needed
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center p-4">
