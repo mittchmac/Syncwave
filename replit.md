@@ -28,17 +28,25 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 ## Artifacts
 
 ### music-sync (React + Vite, preview at `/`)
-Synchronized music playback app "SyncWave".
-- Host creates a room and gets a 4-digit code
-- Guest joins with the code
-- Host uploads MP3 (stored in memory on the server)
-- Host clicks Play — both devices play simultaneously via WebSocket sync
-- Uses timestamp-based scheduling for tight synchronization
+Synchronized music playback app "SyncWave". Supports two modes:
+
+**MP3 mode:** Host uploads an MP3, both devices play via Web Audio API (AudioBufferSourceNode).
+- Uses timestamp-based scheduling for near-perfect sync (~0ms)
+- Critical: Web Audio API only, NOT HTMLAudioElement (blocked by iOS Safari from WS callbacks)
+- AudioContext must be unlocked via user gesture ("Tap to Enable Audio" screen)
+
+**Spotify mode:** Both devices log into Spotify, host searches a track, both play via Spotify Web Playback SDK.
+- PKCE OAuth flow (no client secret needed) — `artifacts/music-sync/src/lib/spotify.ts`
+- `VITE_SPOTIFY_CLIENT_ID` secret required (from developer.spotify.com)
+- Redirect URI: `https://6182fc2f-ced2-4b6f-afa7-25cce6e760d5-00-1qismab4ygrkc.spock.replit.dev/`
+- After Spotify login redirect, `pendingAction` in sessionStorage auto-rejoins/recreates the room
+- Spotify Web Playback SDK does NOT work on iOS Safari (no MSE support)
+- Spotify Premium required for both devices
 
 ### api-server (Express 5, port 8080, preview at `/api`, WebSocket at `/ws`)
 - WebSocket server: `artifacts/api-server/src/lib/websocket.ts`
-- Room state: `artifacts/api-server/src/lib/rooms.ts`
+- Room state: `artifacts/api-server/src/lib/rooms.ts` — includes `mode: "mp3" | "spotify"` field
 - Audio upload/serve: `artifacts/api-server/src/routes/audio.ts` (multer, in-memory)
-- WebSocket messages: `create-room`, `join-room`, `play`, `pause`, `seek`, `audio-ready`, etc.
+- WebSocket messages: `create-room` (with mode), `join-room`, `play`, `pause`, `seek`, `audio-ready`, `spotify-play`, `spotify-pause`, `spotify-seek`
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
