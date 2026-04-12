@@ -80,6 +80,7 @@ export default function MusicSync() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const myRoomCodeRef = useRef<string>("");
   const myPhaseRef = useRef<Phase>("idle");
+  const roomModeRef = useRef<RoomMode>("mp3");
   const audioCtxRef = useRef<AudioContext | null>(null);
   const audioBufferRef = useRef<AudioBuffer | null>(null);
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
@@ -243,6 +244,7 @@ export default function MusicSync() {
       if (msg.type === "room-created") {
         setRoomCode(msg.code);
         myRoomCodeRef.current = msg.code;
+        roomModeRef.current = msg.mode;
         setRoomMode(msg.mode);
         setChoosingMode(false);
         setPhase("hosting");
@@ -251,6 +253,7 @@ export default function MusicSync() {
       } else if (msg.type === "joined-room") {
         setRoomCode(msg.code);
         myRoomCodeRef.current = msg.code;
+        roomModeRef.current = msg.mode;
         setRoomMode(msg.mode);
         setPhase("joined");
         myPhaseRef.current = "joined";
@@ -265,7 +268,7 @@ export default function MusicSync() {
         setClientConnected(false);
       } else if (msg.type === "host-disconnected") {
         setHostDisconnected(true);
-        if (roomMode === "mp3") pauseNow();
+        if (roomModeRef.current === "mp3") pauseNow();
         else { setSpotifyPlaying(false); setNowPlaying(null); }
 
       } else if (msg.type === "audio-ready") {
@@ -296,7 +299,7 @@ export default function MusicSync() {
 
     ws.onclose = () => setConnStatus("disconnected");
     ws.onerror = () => setConnStatus("disconnected");
-  }, [loadAudioFromUrl, pauseNow, playNow, seekTo, execSpotifyPlay, execSpotifyPause, execSpotifySeek, showError, roomMode]);
+  }, [loadAudioFromUrl, pauseNow, playNow, seekTo, execSpotifyPlay, execSpotifyPause, execSpotifySeek, showError]);
 
   // ── Mount: connect WS ──────────────────────────────────────────────────────
   useEffect(() => {
