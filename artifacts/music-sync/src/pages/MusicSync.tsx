@@ -101,6 +101,7 @@ export default function MusicSync() {
   const lastResyncTimeRef = useRef<number>(0);
   const spotifyActivatedRef = useRef(false);
   const isSyncingRef = useRef(false);
+  const lastSpotifyPlayRef = useRef<{ uri: string; positionMs: number; startAt: number } | null>(null);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   const send = useCallback((data: object) => {
@@ -391,6 +392,8 @@ export default function MusicSync() {
       } else if (msg.type === "spotify-play") {
         setNowPlaying({ uri: msg.trackUri, name: msg.trackName, artist: msg.artistName, albumArt: msg.albumArt });
         setSpotifyPlaying(true);
+        // Cache so we can re-sync when the tab comes back to the foreground
+        lastSpotifyPlayRef.current = { uri: msg.trackUri, positionMs: msg.positionMs, startAt: msg.startAt };
         execSpotifyPlay(msg.trackUri, msg.positionMs, msg.startAt);
 
       } else if (msg.type === "spotify-pause") {
@@ -536,16 +539,27 @@ export default function MusicSync() {
     }
   }, [phase]);
 
-  // ── Re-poll immediately when phone is unlocked / tab becomes visible ───────
+  // ── Re-sync when phone is unlocked / tab becomes visible ──────────────────
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible" && isSyncingRef.current && myPhaseRef.current === "hosting") {
+      if (document.visibilityState !== "visible") return;
+
+      if (isSyncingRef.current && myPhaseRef.current === "hosting") {
+        // Host: re-poll Spotify to detect any track change made while locked
         pollAndSync();
+      } else if (myPhaseRef.current === "joined") {
+        // Listener: replay the last known track with the position compensated
+        // for however long the app was in the background
+        const last = lastSpotifyPlayRef.current;
+        if (last) {
+          const elapsed = Math.max(0, Date.now() - last.startAt);
+          execSpotifyPlay(last.uri, last.positionMs + elapsed, Date.now() + 300);
+        }
       }
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [pollAndSync]);
+  }, [pollAndSync, execSpotifyPlay]);
 
   // ── Skip track handlers (host) ─────────────────────────────────────────────
   const handleSkipNext = useCallback(async () => {
