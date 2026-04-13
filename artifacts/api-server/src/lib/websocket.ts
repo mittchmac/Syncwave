@@ -9,9 +9,14 @@ import {
   getRooms,
 } from "./rooms";
 
+// Grace period before the room is actually deleted after the host drops
+const HOST_GRACE_MS = 45_000;
+
 type WsMessage =
   | { type: "create-room"; mode?: "mp3" | "spotify" }
   | { type: "join-room"; code: string }
+  | { type: "rejoin-room"; code: string }
+  | { type: "ping" }
   | { type: "play"; startAt: number }
   | { type: "pause" }
   | { type: "seek"; position: number }
@@ -36,7 +41,8 @@ function send(ws: WebSocket, data: object) {
 export function setupWebSocket(server: Server) {
   const wss = new WebSocketServer({ server, path: "/ws" });
 
-  // Keep connections alive through Replit's proxy (60s idle timeout)
+  // Server-side heartbeat — pings every 20s to keep the connection alive
+  // through Replit's proxy idle timeout
   const heartbeat = setInterval(() => {
     wss.clients.forEach((client) => {
       const c = client as WebSocket & { isAlive?: boolean };
@@ -44,7 +50,7 @@ export function setupWebSocket(server: Server) {
       c.isAlive = false;
       c.ping();
     });
-  }, 25_000);
+  }, 20_000);
 
   wss.on("close", () => clearInterval(heartbeat));
 
@@ -66,6 +72,13 @@ export function setupWebSocket(server: Server) {
         return;
       }
 
+      // Client-side keepalive — just reset isAlive and respond
+      if (msg.type === "ping") {
+        liveWs.isAlive = true;
+        send(ws, { type: "pong" });
+        return;
+      }
+
       if (msg.type === "create-room") {
         const code = generateRoomCode();
         const mode = msg.mode ?? "mp3";
@@ -74,6 +87,35 @@ export function setupWebSocket(server: Server) {
         myRole = "host";
         send(ws, { type: "room-created", code, mode });
         logger.info({ code, mode }, "Room created");
+        return;
+      }
+
+      // Host rejoins after a transient disconnect (within the grace window)
+      if (msg.type === "rejoin-room") {
+        const room = getRoom(msg.code);
+        if (!room) {
+          send(ws, { type: "error", message: "Room expired" });
+          return;
+        }
+        if (room.hostConnected) {
+          send(ws, { type: "error", message: "Room already has a host" });
+          return;
+        }
+        // Cancel the deletion timer
+        if (room.deleteTimer) {
+          clearTimeout(room.deleteTimer);
+          room.deleteTimer = null;
+        }
+        room.host = ws;
+        room.hostConnected = true;
+        myRoomCode = msg.code;
+        myRole = "host";
+        send(ws, { type: "room-created", code: msg.code, mode: room.mode });
+        if (room.client) {
+          send(room.client, { type: "host-reconnected" });
+          send(ws, { type: "client-joined" });
+        }
+        logger.info({ code: msg.code }, "Host rejoined room");
         return;
       }
 
@@ -187,11 +229,21 @@ export function setupWebSocket(server: Server) {
       if (!room) return;
 
       if (myRole === "host") {
-        if (room.client) {
-          send(room.client, { type: "host-disconnected" });
-        }
-        deleteRoom(myRoomCode);
-        logger.info({ code: myRoomCode }, "Host disconnected, room deleted");
+        room.hostConnected = false;
+        room.host = null;
+        logger.info({ code: myRoomCode }, "Host disconnected — grace period started");
+
+        // Give the host 45s to reconnect before notifying the listener and deleting the room
+        const code = myRoomCode;
+        room.deleteTimer = setTimeout(() => {
+          const r = getRoom(code);
+          if (r && !r.hostConnected) {
+            if (r.client) send(r.client, { type: "host-disconnected" });
+            deleteRoom(code);
+            logger.info({ code }, "Host did not reconnect — room deleted");
+          }
+        }, HOST_GRACE_MS);
+
       } else if (myRole === "client") {
         room.client = null;
         if (room.host) {

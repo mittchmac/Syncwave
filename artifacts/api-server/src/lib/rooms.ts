@@ -9,6 +9,8 @@ export interface Room {
   audioData: Buffer | null;
   audioName: string | null;
   mode: RoomMode;
+  hostConnected: boolean;
+  deleteTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const rooms = new Map<string, Room>();
@@ -22,7 +24,10 @@ export function generateRoomCode(): string {
 }
 
 export function createRoom(code: string, host: WebSocket, mode: RoomMode = "mp3"): Room {
-  const room: Room = { code, host, client: null, audioData: null, audioName: null, mode };
+  const room: Room = {
+    code, host, client: null, audioData: null, audioName: null, mode,
+    hostConnected: true, deleteTimer: null,
+  };
   rooms.set(code, room);
   return room;
 }
@@ -32,6 +37,8 @@ export function getRoom(code: string): Room | undefined {
 }
 
 export function deleteRoom(code: string): void {
+  const room = rooms.get(code);
+  if (room?.deleteTimer) clearTimeout(room.deleteTimer);
   rooms.delete(code);
 }
 

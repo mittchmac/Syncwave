@@ -19,6 +19,8 @@ type WsEvent =
   | { type: "client-joined" }
   | { type: "client-disconnected" }
   | { type: "host-disconnected" }
+  | { type: "host-reconnected" }
+  | { type: "pong" }
   | { type: "audio-ready"; audioName: string }
   | { type: "play"; startAt: number }
   | { type: "pause" }
@@ -102,6 +104,7 @@ export default function MusicSync() {
   const spotifyActivatedRef = useRef(false);
   const isSyncingRef = useRef(false);
   const lastSpotifyPlayRef = useRef<{ uri: string; positionMs: number; startAt: number } | null>(null);
+  const wsHeartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   const send = useCallback((data: object) => {
@@ -339,7 +342,27 @@ export default function MusicSync() {
     const ws = new WebSocket(getWsUrl());
     wsRef.current = ws;
 
-    ws.onopen = () => setConnStatus("connected");
+    ws.onopen = () => {
+      setConnStatus("connected");
+
+      // Client-side keepalive — send a ping every 15s so the proxy never
+      // sees an idle connection from our side
+      if (wsHeartbeatRef.current) clearInterval(wsHeartbeatRef.current);
+      wsHeartbeatRef.current = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "ping" }));
+        }
+      }, 15_000);
+
+      // Auto-rejoin after a transient disconnection
+      const code = myRoomCodeRef.current;
+      const phase = myPhaseRef.current;
+      if (code && phase === "hosting") {
+        ws.send(JSON.stringify({ type: "rejoin-room", code }));
+      } else if (code && phase === "joined") {
+        ws.send(JSON.stringify({ type: "join-room", code }));
+      }
+    };
 
     ws.onmessage = (event) => {
       let msg: WsEvent;
@@ -378,6 +401,12 @@ export default function MusicSync() {
         if (roomModeRef.current === "mp3") pauseNow();
         else { setSpotifyPlaying(false); setNowPlaying(null); }
 
+      } else if (msg.type === "host-reconnected") {
+        setHostDisconnected(false);
+
+      } else if (msg.type === "pong") {
+        // server acknowledged our keepalive — nothing to do
+
       } else if (msg.type === "audio-ready") {
         setAudioName(msg.audioName);
         loadAudioFromUrl(`/api/rooms/${myRoomCodeRef.current}/audio`);
@@ -406,7 +435,10 @@ export default function MusicSync() {
       }
     };
 
-    ws.onclose = () => setConnStatus("disconnected");
+    ws.onclose = () => {
+      if (wsHeartbeatRef.current) { clearInterval(wsHeartbeatRef.current); wsHeartbeatRef.current = null; }
+      setConnStatus("disconnected");
+    };
     ws.onerror = () => setConnStatus("disconnected");
   }, [loadAudioFromUrl, pauseNow, playNow, seekTo, execSpotifyPlay, execSpotifyPause, execSpotifySeek, showError]);
 
@@ -417,8 +449,18 @@ export default function MusicSync() {
       wsRef.current?.close();
       stopTracking();
       if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
+      if (wsHeartbeatRef.current) clearInterval(wsHeartbeatRef.current);
     };
   }, [connectWs]);
+
+  // ── Auto-reconnect after transient disconnection ───────────────────────────
+  useEffect(() => {
+    if (connStatus !== "disconnected") return;
+    // Only auto-reconnect if the user was in an active session
+    if (myPhaseRef.current === "idle") return;
+    const timer = setTimeout(() => connectWs(), 2_000);
+    return () => clearTimeout(timer);
+  }, [connStatus, connectWs]);
 
   // ── Mount: handle Spotify OAuth callback or stored token ───────────────────
   useEffect(() => {
