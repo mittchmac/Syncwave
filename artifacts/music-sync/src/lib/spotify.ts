@@ -242,11 +242,18 @@ export async function playTrack(
   uri: string,
   positionMs = 0
 ): Promise<void> {
-  await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${encodeURIComponent(deviceId)}`, {
+  const res = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${encodeURIComponent(deviceId)}`, {
     method: "PUT",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ uris: [uri], position_ms: positionMs }),
   });
+  if (!res.ok && res.status !== 204) {
+    let detail = `HTTP ${res.status}`;
+    try { const j = await res.json() as { error?: { message?: string } }; detail = j?.error?.message ?? detail; } catch { /* ignore */ }
+    if (res.status === 403) throw new Error("Spotify Premium is required on this device to play audio.");
+    if (res.status === 404) throw new Error("Spotify player not ready. Open the Spotify app then try again.");
+    throw new Error(`Spotify play failed: ${detail}`);
+  }
 }
 
 export async function pauseTrack(token: string, deviceId: string): Promise<void> {

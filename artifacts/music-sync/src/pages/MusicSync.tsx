@@ -207,17 +207,26 @@ export default function MusicSync() {
       return;
     }
 
-    const doPlay = async () => {
-      const token = await getValidToken();
-      if (!token || !spotifyDeviceIdRef.current) return;
-      await playTrack(token, spotifyDeviceIdRef.current, uri, positionMs);
-      setSpotifyPlaying(true);
+    const doPlay = async (adjustedPositionMs: number) => {
+      try {
+        const token = await getValidToken();
+        if (!token || !spotifyDeviceIdRef.current) return;
+        await playTrack(token, spotifyDeviceIdRef.current, uri, adjustedPositionMs);
+        setSpotifyPlaying(true);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Spotify playback failed.";
+        setSpotifyError(msg);
+        setSpotifyPlaying(false);
+      }
     };
 
     if (delay > 150) {
-      setTimeout(doPlay, delay - 100);
+      // Play at the right position when startAt arrives
+      setTimeout(() => doPlay(positionMs), delay - 100);
     } else {
-      await doPlay();
+      // startAt is in the past — compensate position for elapsed time
+      const elapsed = Math.max(0, -delay);
+      await doPlay(positionMs + elapsed);
     }
   }, []);
 
