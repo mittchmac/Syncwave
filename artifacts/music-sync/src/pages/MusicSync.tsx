@@ -76,6 +76,7 @@ export default function MusicSync() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [noActivePlayback, setNoActivePlayback] = useState(false);
   const [shouldInitSdk, setShouldInitSdk] = useState(false);
+  const [spotifyActivated, setSpotifyActivated] = useState(false);
 
   // ── Refs ───────────────────────────────────────────────────────────────────
   const wsRef = useRef<WebSocket | null>(null);
@@ -98,6 +99,7 @@ export default function MusicSync() {
   const lastTrackUriRef = useRef<string | null>(null);
   const lastIsPlayingRef = useRef<boolean>(false);
   const lastResyncTimeRef = useRef<number>(0);
+  const spotifyActivatedRef = useRef(false);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   const send = useCallback((data: object) => {
@@ -202,7 +204,8 @@ export default function MusicSync() {
     const delay = startAt - Date.now();
     const deviceId = spotifyDeviceIdRef.current;
 
-    if (!deviceId) {
+    // Store as pending if device not ready OR audio not yet activated by user gesture
+    if (!deviceId || !spotifyActivatedRef.current) {
       pendingSpotifyPlayRef.current = { uri, positionMs, startAt };
       return;
     }
@@ -221,10 +224,8 @@ export default function MusicSync() {
     };
 
     if (delay > 150) {
-      // Play at the right position when startAt arrives
       setTimeout(() => doPlay(positionMs), delay - 100);
     } else {
-      // startAt is in the past — compensate position for elapsed time
       const elapsed = Math.max(0, -delay);
       await doPlay(positionMs + elapsed);
     }
@@ -585,7 +586,34 @@ export default function MusicSync() {
     setSpotifyReady(false);
     setNowPlaying(null);
     setIsSyncing(false);
+    setSpotifyActivated(false);
     if (syncIntervalRef.current) { clearInterval(syncIntervalRef.current); syncIntervalRef.current = null; }
+  };
+
+  const handleActivateSpotify = async () => {
+    const player = spotifyPlayerRef.current;
+    if (!player) return;
+    try {
+      await player.activateElement();
+    } catch { /* some browsers don't support it — fall through */ }
+
+    spotifyActivatedRef.current = true;
+    setSpotifyActivated(true);
+
+    // Case 1: a spotify-play arrived before activation — execute it now
+    const pending = pendingSpotifyPlayRef.current;
+    if (pending) {
+      pendingSpotifyPlayRef.current = null;
+      const elapsed = Math.max(0, Date.now() - pending.startAt);
+      execSpotifyPlay(pending.uri, pending.positionMs + elapsed, Date.now());
+      return;
+    }
+
+    // Case 2: track already loaded but paused by autoplay restriction — resume
+    try {
+      const state = await player.getCurrentState();
+      if (state && state.paused) await player.resume();
+    } catch { /* ignore */ }
   };
 
   const copyCode = () => {
@@ -1073,9 +1101,22 @@ export default function MusicSync() {
                       </div>
                     </div>
 
-                    {nowPlaying ? (
+                    {/* Must tap once to unlock SDK audio on mobile */}
+                    {spotifyReady && !spotifyActivated && (
+                      <button
+                        onClick={handleActivateSpotify}
+                        className="w-full flex items-center justify-center gap-2 py-4 rounded-xl bg-[#1DB954] text-black font-bold text-base hover:opacity-90 active:scale-[0.97] transition-all shadow-lg"
+                      >
+                        <Volume2 className="w-5 h-5" />
+                        Tap to Start Listening
+                      </button>
+                    )}
+
+                    {spotifyActivated && nowPlaying && (
                       <NowPlayingCard track={nowPlaying} playing={spotifyPlaying} />
-                    ) : (
+                    )}
+
+                    {spotifyActivated && !nowPlaying && (
                       <div className="text-center py-6">
                         <div className="w-10 h-10 rounded-full bg-[#1DB954]/20 flex items-center justify-center mx-auto mb-3">
                           <SpotifyLogo size={5} />
@@ -1084,9 +1125,18 @@ export default function MusicSync() {
                       </div>
                     )}
 
-                    <div className={`text-center text-xs font-medium ${spotifyPlaying ? "text-[#1DB954]" : "text-muted-foreground"}`}>
-                      {spotifyPlaying ? "▶ Playing in sync" : nowPlaying ? "Paused" : ""}
-                    </div>
+                    {spotifyActivated && (
+                      <div className={`text-center text-xs font-medium ${spotifyPlaying ? "text-[#1DB954]" : "text-muted-foreground"}`}>
+                        {spotifyPlaying ? "▶ Playing in sync" : nowPlaying ? "Paused" : ""}
+                      </div>
+                    )}
+
+                    {!spotifyReady && (
+                      <div className="text-center py-4">
+                        <div className="w-5 h-5 border-2 border-[#1DB954] border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                        <p className="text-xs text-muted-foreground">Connecting Spotify player…</p>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

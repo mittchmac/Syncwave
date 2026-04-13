@@ -166,6 +166,7 @@ export interface SpotifyPlayer {
   pause(): Promise<void>;
   resume(): Promise<void>;
   seek(positionMs: number): Promise<void>;
+  activateElement(): Promise<void>;
 }
 
 export interface SpotifyPlaybackState {
