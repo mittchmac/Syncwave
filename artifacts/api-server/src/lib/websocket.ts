@@ -36,8 +36,24 @@ function send(ws: WebSocket, data: object) {
 export function setupWebSocket(server: Server) {
   const wss = new WebSocketServer({ server, path: "/ws" });
 
+  // Keep connections alive through Replit's proxy (60s idle timeout)
+  const heartbeat = setInterval(() => {
+    wss.clients.forEach((client) => {
+      const c = client as WebSocket & { isAlive?: boolean };
+      if (c.isAlive === false) { c.terminate(); return; }
+      c.isAlive = false;
+      c.ping();
+    });
+  }, 25_000);
+
+  wss.on("close", () => clearInterval(heartbeat));
+
   wss.on("connection", (ws) => {
     logger.info("WebSocket client connected");
+    const liveWs = ws as WebSocket & { isAlive?: boolean };
+    liveWs.isAlive = true;
+    liveWs.on("pong", () => { liveWs.isAlive = true; });
+
     let myRoomCode: string | null = null;
     let myRole: "host" | "client" | null = null;
 
