@@ -158,8 +158,8 @@ export function setupWebSocket(server: Server) {
           positionMs: msg.positionMs,
           startAt: msg.startAt,
         };
+        // Only forward to listener — host manages its own playback directly
         if (room.client) send(room.client, payload);
-        send(ws, payload);
         logger.info({ trackUri: msg.trackUri }, "Spotify play broadcast");
         return;
       }
@@ -169,7 +169,6 @@ export function setupWebSocket(server: Server) {
         const room = getRoom(myRoomCode);
         if (!room) return;
         if (room.client) send(room.client, { type: "spotify-pause" });
-        send(ws, { type: "spotify-pause" });
         return;
       }
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
   Music, Upload, Play, Pause, Wifi, WifiOff, Users, Radio,
-  Copy, Check, Volume2, LogOut, X, RefreshCw,
+  Copy, Check, Volume2, LogOut, X, RefreshCw, SkipBack, SkipForward,
 } from "lucide-react";
 import {
   startLogin, handleCallback, getStoredToken, getValidToken, clearTokens,
@@ -100,6 +100,7 @@ export default function MusicSync() {
   const lastIsPlayingRef = useRef<boolean>(false);
   const lastResyncTimeRef = useRef<number>(0);
   const spotifyActivatedRef = useRef(false);
+  const isSyncingRef = useRef(false);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   const send = useCallback((data: object) => {
@@ -281,6 +282,11 @@ export default function MusicSync() {
         startAt,
       });
 
+      // Also start / re-sync the host's own SDK device on track change
+      if (trackChanged && spotifyActivatedRef.current && spotifyDeviceIdRef.current) {
+        execSpotifyPlay(trackUri, syncedPositionMs, startAt);
+      }
+
       setNowPlaying({ uri: trackUri, name: trackName, artist: artistName, albumArt });
       setSpotifyPlaying(true);
       lastTrackUriRef.current = trackUri;
@@ -297,10 +303,10 @@ export default function MusicSync() {
       setNowPlaying({ uri: trackUri, name: trackName, artist: artistName, albumArt });
       lastTrackUriRef.current = trackUri;
     }
-  }, [send]);
+  }, [send, execSpotifyPlay]);
 
   const handleStartSync = useCallback(async () => {
-    // Run one poll immediately, then start interval
+    isSyncingRef.current = true;
     setIsSyncing(true);
     lastTrackUriRef.current = null;
     lastIsPlayingRef.current = false;
@@ -310,12 +316,19 @@ export default function MusicSync() {
   }, [pollAndSync]);
 
   const handleStopSync = useCallback(() => {
+    isSyncingRef.current = false;
     setIsSyncing(false);
     if (syncIntervalRef.current) {
       clearInterval(syncIntervalRef.current);
       syncIntervalRef.current = null;
     }
     send({ type: "spotify-pause" });
+    // Also pause host's SDK device
+    if (spotifyDeviceIdRef.current) {
+      getValidToken().then((token) => {
+        if (token && spotifyDeviceIdRef.current) pauseTrack(token, spotifyDeviceIdRef.current).catch(() => {});
+      });
+    }
     setSpotifyPlaying(false);
   }, [send]);
 
@@ -340,6 +353,7 @@ export default function MusicSync() {
         setChoosingMode(false);
         setPhase("hosting");
         myPhaseRef.current = "hosting";
+        if (msg.mode === "spotify") setShouldInitSdk(true);
 
       } else if (msg.type === "joined-room") {
         setRoomCode(msg.code);
@@ -517,9 +531,37 @@ export default function MusicSync() {
     if (phase !== "hosting" && syncIntervalRef.current) {
       clearInterval(syncIntervalRef.current);
       syncIntervalRef.current = null;
+      isSyncingRef.current = false;
       setIsSyncing(false);
     }
   }, [phase]);
+
+  // ── Re-poll immediately when phone is unlocked / tab becomes visible ───────
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible" && isSyncingRef.current && myPhaseRef.current === "hosting") {
+        pollAndSync();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [pollAndSync]);
+
+  // ── Skip track handlers (host) ─────────────────────────────────────────────
+  const handleSkipNext = useCallback(async () => {
+    const player = spotifyPlayerRef.current;
+    if (!player) return;
+    await player.nextTrack();
+    // Give Spotify ~800 ms to register the change, then poll
+    setTimeout(() => pollAndSync(), 800);
+  }, [pollAndSync]);
+
+  const handleSkipPrev = useCallback(async () => {
+    const player = spotifyPlayerRef.current;
+    if (!player) return;
+    await player.previousTrack();
+    setTimeout(() => pollAndSync(), 800);
+  }, [pollAndSync]);
 
   // ── Handlers: room creation ────────────────────────────────────────────────
   const handleCreateMp3Room = () => {
@@ -950,13 +992,13 @@ export default function MusicSync() {
               </div>
 
               {/* How it works */}
-              {!isSyncing && (
+              {!isSyncing && !spotifyActivated && (
                 <div className="bg-secondary/50 rounded-xl p-4 space-y-2">
                   <p className="text-xs font-medium text-foreground">How it works</p>
                   <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
-                    <li>Open the Spotify app and start playing any song</li>
-                    <li>Tap <strong className="text-foreground">Start Syncing</strong> below</li>
-                    <li>Skip tracks freely — the other phone follows automatically</li>
+                    <li>Open Spotify and start playing any song</li>
+                    <li>Tap <strong className="text-foreground">Activate Audio</strong>, then <strong className="text-foreground">Start Syncing</strong></li>
+                    <li>Music plays here and on the other phone in sync</li>
                   </ol>
                 </div>
               )}
@@ -966,6 +1008,26 @@ export default function MusicSync() {
                 <div className="space-y-1.5">
                   <p className="text-xs text-muted-foreground font-medium">Now syncing</p>
                   <NowPlayingCard track={nowPlaying} playing={spotifyPlaying} />
+                </div>
+              )}
+
+              {/* Skip controls (visible while syncing) */}
+              {isSyncing && (
+                <div className="flex items-center justify-center gap-3">
+                  <button
+                    onClick={handleSkipPrev}
+                    disabled={!spotifyReady}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-secondary text-secondary-foreground text-sm font-medium hover:bg-accent active:scale-[0.97] transition-all disabled:opacity-40"
+                  >
+                    <SkipBack className="w-4 h-4" /> Prev
+                  </button>
+                  <button
+                    onClick={handleSkipNext}
+                    disabled={!spotifyReady}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-secondary text-secondary-foreground text-sm font-medium hover:bg-accent active:scale-[0.97] transition-all disabled:opacity-40"
+                  >
+                    Next <SkipForward className="w-4 h-4" />
+                  </button>
                 </div>
               )}
 
@@ -980,15 +1042,26 @@ export default function MusicSync() {
               {isSyncing && !noActivePlayback && nowPlaying && (
                 <div className="flex items-center gap-2 text-xs text-[#1DB954]">
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  Syncing every {POLL_INTERVAL_MS / 1000}s · re-aligns every {RESYNC_INTERVAL_MS / 1000}s
+                  Live · re-aligns every {RESYNC_INTERVAL_MS / 1000}s
                 </div>
+              )}
+
+              {/* Activate audio button (host needs to unlock browser audio before syncing) */}
+              {!isSyncing && spotifyReady && !spotifyActivated && (
+                <button
+                  onClick={handleActivateSpotify}
+                  className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-primary/20 border-2 border-primary/50 text-primary font-semibold text-sm hover:bg-primary/30 hover:border-primary/80 active:scale-[0.97] transition-all"
+                >
+                  <Volume2 className="w-4 h-4" /> Activate Audio
+                </button>
               )}
 
               {/* Main button */}
               {!isSyncing ? (
                 <button
                   onClick={handleStartSync}
-                  className="w-full flex items-center justify-center gap-2 py-4 rounded-xl bg-[#1DB954] text-black font-bold text-base hover:opacity-90 active:scale-[0.97] transition-all shadow-lg"
+                  disabled={spotifyReady && !spotifyActivated}
+                  className="w-full flex items-center justify-center gap-2 py-4 rounded-xl bg-[#1DB954] text-black font-bold text-base hover:opacity-90 active:scale-[0.97] transition-all shadow-lg disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <SpotifyLogo size={5} />
                   Start Syncing
