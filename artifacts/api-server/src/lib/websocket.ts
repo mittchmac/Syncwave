@@ -10,7 +10,8 @@ import {
 } from "./rooms";
 
 // Grace period before the room is actually deleted after the host drops
-const HOST_GRACE_MS = 45_000;
+// iOS freezes backgrounded tabs — give the host 2 min to come back
+const HOST_GRACE_MS = 120_000;
 
 type WsMessage =
   | { type: "create-room"; mode?: "mp3" | "spotify" }
