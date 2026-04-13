@@ -256,6 +256,22 @@ export async function pauseTrack(token: string, deviceId: string): Promise<void>
   });
 }
 
+export interface SpotifyCurrentPlayback {
+  is_playing: boolean;
+  progress_ms: number;
+  item: SpotifyTrack | null;
+  device: { id: string; name: string; is_active: boolean } | null;
+}
+
+export async function getCurrentPlayback(token: string): Promise<SpotifyCurrentPlayback | null> {
+  const res = await fetch("https://api.spotify.com/v1/me/player?additional_types=track", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 204) return null;
+  if (!res.ok) return null;
+  return res.json() as Promise<SpotifyCurrentPlayback>;
+}
+
 export async function seekTrack(token: string, deviceId: string, positionMs: number): Promise<void> {
   await fetch(
     `https://api.spotify.com/v1/me/player/seek?device_id=${encodeURIComponent(deviceId)}&position_ms=${positionMs}`,
