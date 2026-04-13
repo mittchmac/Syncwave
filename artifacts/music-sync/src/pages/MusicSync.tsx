@@ -101,6 +101,11 @@ export default function MusicSync() {
   const lastTrackUriRef = useRef<string | null>(null);
   const lastIsPlayingRef = useRef<boolean>(false);
   const lastResyncTimeRef = useRef<number>(0);
+  // Consecutive "paused" polls needed before we propagate a pause to the listener.
+  // This prevents a track-skip transition (Spotify briefly returns is_playing=false)
+  // from being misread as a deliberate pause.
+  const pauseCountRef = useRef<number>(0);
+  const PAUSE_CONFIRM_POLLS = 2;
   const spotifyActivatedRef = useRef(false);
   const isSyncingRef = useRef(false);
   const lastSpotifyPlayRef = useRef<{ uri: string; positionMs: number; startAt: number } | null>(null);
@@ -272,28 +277,39 @@ export default function MusicSync() {
     const playStateChanged = is_playing !== lastIsPlayingRef.current;
     const timeForResync = is_playing && (Date.now() - lastResyncTimeRef.current > RESYNC_INTERVAL_MS);
 
-    if (is_playing && (trackChanged || playStateChanged || timeForResync)) {
-      const startAt = Date.now() + SYNC_LEAD_MS;
-      const syncedPositionMs = progress_ms + SYNC_LEAD_MS;
+    if (is_playing) {
+      // Reset the debounce counter — we're clearly playing
+      pauseCountRef.current = 0;
 
-      send({
-        type: "spotify-play",
-        trackUri,
-        trackName,
-        artistName,
-        albumArt,
-        positionMs: syncedPositionMs,
-        startAt,
-      });
+      if (trackChanged || playStateChanged || timeForResync) {
+        const startAt = Date.now() + SYNC_LEAD_MS;
+        const syncedPositionMs = progress_ms + SYNC_LEAD_MS;
 
-      setNowPlaying({ uri: trackUri, name: trackName, artist: artistName, albumArt });
-      setSpotifyPlaying(true);
-      lastTrackUriRef.current = trackUri;
-      lastResyncTimeRef.current = Date.now();
+        send({
+          type: "spotify-play",
+          trackUri,
+          trackName,
+          artistName,
+          albumArt,
+          positionMs: syncedPositionMs,
+          startAt,
+        });
 
-    } else if (!is_playing && playStateChanged) {
-      send({ type: "spotify-pause" });
-      setSpotifyPlaying(false);
+        setNowPlaying({ uri: trackUri, name: trackName, artist: artistName, albumArt });
+        setSpotifyPlaying(true);
+        lastTrackUriRef.current = trackUri;
+        lastResyncTimeRef.current = Date.now();
+      }
+    } else {
+      // is_playing === false
+      // A track-skip causes a brief pause blip (~0.5s). Only propagate a pause
+      // after PAUSE_CONFIRM_POLLS consecutive "paused" responses, confirming it's real.
+      pauseCountRef.current += 1;
+      // Fire exactly when we cross the threshold — fires once, not on every subsequent poll
+      if (pauseCountRef.current === PAUSE_CONFIRM_POLLS) {
+        send({ type: "spotify-pause" });
+        setSpotifyPlaying(false);
+      }
     }
 
     lastIsPlayingRef.current = is_playing;
@@ -310,6 +326,7 @@ export default function MusicSync() {
     lastTrackUriRef.current = null;
     lastIsPlayingRef.current = false;
     lastResyncTimeRef.current = 0;
+    pauseCountRef.current = 0;
     await pollAndSync();
     syncIntervalRef.current = setInterval(pollAndSync, POLL_INTERVAL_MS);
   }, [pollAndSync]);
