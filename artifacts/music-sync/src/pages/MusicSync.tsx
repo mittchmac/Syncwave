@@ -397,6 +397,14 @@ export default function MusicSync() {
           setAudioName(msg.audioName);
           loadAudioFromUrl(`/api/rooms/${msg.code}/audio`);
         }
+        // If the host is already syncing, jump into the current track immediately
+        if (msg.lastSpotifyPlay) {
+          const lsp = msg.lastSpotifyPlay as { trackUri: string; trackName: string; artistName: string; albumArt: string; positionMs: number; startAt: number };
+          lastSpotifyPlayRef.current = { uri: lsp.trackUri, positionMs: lsp.positionMs, startAt: lsp.startAt };
+          setNowPlaying({ uri: lsp.trackUri, name: lsp.trackName, artist: lsp.artistName, albumArt: lsp.albumArt });
+          setSpotifyPlaying(true);
+          execSpotifyPlay(lsp.trackUri, lsp.positionMs, lsp.startAt);
+        }
 
       } else if (msg.type === "client-joined") {
         setClientConnected(true);
@@ -424,7 +432,7 @@ export default function MusicSync() {
       } else if (msg.type === "seek") {
         seekTo(msg.position);
 
-      } else if (msg.type === "spotify-play") {
+      } else if (msg.type === "spotify-play" || msg.type === "sync-state") {
         setNowPlaying({ uri: msg.trackUri, name: msg.trackName, artist: msg.artistName, albumArt: msg.albumArt });
         setSpotifyPlaying(true);
         // Cache so we can re-sync when the tab comes back to the foreground
@@ -587,27 +595,54 @@ export default function MusicSync() {
     }
   }, [phase]);
 
+  // ── Media Session API (listener) ──────────────────────────────────────────
+  // Updates the OS lock-screen / notification player so the correct song name
+  // and artwork are shown, and prevents the skip buttons from trying to advance
+  // the SDK's empty queue (which would fail silently and confuse the user).
+  useEffect(() => {
+    if (myPhaseRef.current !== "joined" || !("mediaSession" in navigator)) return;
+    if (!nowPlaying) return;
+
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: nowPlaying.name,
+      artist: nowPlaying.artist,
+      artwork: nowPlaying.albumArt
+        ? [{ src: nowPlaying.albumArt, sizes: "512x512", type: "image/jpeg" }]
+        : [],
+    });
+
+    // Intercept skip/prev — the host controls what plays, so we request a
+    // re-sync from the server rather than letting the SDK try to skip its queue
+    const requestSync = () => send({ type: "request-sync" });
+    navigator.mediaSession.setActionHandler("nexttrack", requestSync);
+    navigator.mediaSession.setActionHandler("previoustrack", requestSync);
+
+    return () => {
+      try {
+        navigator.mediaSession.setActionHandler("nexttrack", null);
+        navigator.mediaSession.setActionHandler("previoustrack", null);
+      } catch { /* ignore */ }
+    };
+  }, [nowPlaying, send]);
+
   // ── Re-sync when phone is unlocked / tab becomes visible ──────────────────
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState !== "visible") return;
 
       if (isSyncingRef.current && myPhaseRef.current === "hosting") {
-        // Host: re-poll Spotify to detect any track change made while locked
+        // Host: re-poll Spotify immediately to catch any track changes while locked
         pollAndSync();
       } else if (myPhaseRef.current === "joined") {
-        // Listener: replay the last known track with the position compensated
-        // for however long the app was in the background
-        const last = lastSpotifyPlayRef.current;
-        if (last) {
-          const elapsed = Math.max(0, Date.now() - last.startAt);
-          execSpotifyPlay(last.uri, last.positionMs + elapsed, Date.now() + 300);
-        }
+        // Listener: ask the server for the current authoritative state.
+        // This handles the case where the track changed while the tab was
+        // backgrounded and the WS event was missed / never executed.
+        send({ type: "request-sync" });
       }
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [pollAndSync, execSpotifyPlay]);
+  }, [pollAndSync, send]);
 
   // ── Handlers: room creation ────────────────────────────────────────────────
   const handleCreateMp3Room = () => {

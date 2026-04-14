@@ -2,6 +2,16 @@ import type { WebSocket } from "ws";
 
 export type RoomMode = "mp3" | "spotify";
 
+export interface LastSpotifyPlay {
+  trackUri: string;
+  trackName: string;
+  artistName: string;
+  albumArt: string;
+  positionMs: number;
+  /** server wall-clock ms when the payload was originally sent */
+  sentAt: number;
+}
+
 export interface Room {
   code: string;
   host: WebSocket | null;
@@ -11,6 +21,8 @@ export interface Room {
   mode: RoomMode;
   hostConnected: boolean;
   deleteTimer: ReturnType<typeof setTimeout> | null;
+  /** Most recent spotify-play snapshot, used to re-sync late-joining / backgrounded listeners */
+  lastSpotifyPlay: LastSpotifyPlay | null;
 }
 
 const rooms = new Map<string, Room>();
@@ -26,7 +38,7 @@ export function generateRoomCode(): string {
 export function createRoom(code: string, host: WebSocket, mode: RoomMode = "mp3"): Room {
   const room: Room = {
     code, host, client: null, audioData: null, audioName: null, mode,
-    hostConnected: true, deleteTimer: null,
+    hostConnected: true, deleteTimer: null, lastSpotifyPlay: null,
   };
   rooms.set(code, room);
   return room;

@@ -18,6 +18,7 @@ type WsMessage =
   | { type: "join-room"; code: string }
   | { type: "rejoin-room"; code: string }
   | { type: "ping" }
+  | { type: "request-sync" }
   | { type: "play"; startAt: number }
   | { type: "pause" }
   | { type: "seek"; position: number }
@@ -134,17 +135,47 @@ export function setupWebSocket(server: Server) {
         myRoomCode = msg.code;
         myRole = "client";
 
-        send(ws, {
+        // If the host is already syncing, send the current track state so the
+        // listener doesn't have to wait for the next poll to start playing
+        const joinedPayload: Record<string, unknown> = {
           type: "joined-room",
           code: msg.code,
           mode: room.mode,
           hasAudio: !!room.audioData,
           audioName: room.audioName,
-        });
+        };
+        if (room.lastSpotifyPlay) {
+          joinedPayload.lastSpotifyPlay = {
+            ...room.lastSpotifyPlay,
+            // re-stamp so the client can compute elapsed time accurately
+            sentAt: Date.now(),
+            positionMs: room.lastSpotifyPlay.positionMs +
+              (Date.now() - room.lastSpotifyPlay.sentAt),
+          };
+        }
+        send(ws, joinedPayload);
         if (room.host) {
           send(room.host, { type: "client-joined" });
         }
         logger.info({ code: msg.code, mode: room.mode }, "Client joined room");
+        return;
+      }
+
+      // Listener requests the current track state (sent when tab regains focus)
+      if (msg.type === "request-sync") {
+        if (!myRoomCode || myRole !== "client") return;
+        const room = getRoom(myRoomCode);
+        if (!room || !room.lastSpotifyPlay) return;
+        const elapsed = Date.now() - room.lastSpotifyPlay.sentAt;
+        send(ws, {
+          type: "sync-state",
+          trackUri: room.lastSpotifyPlay.trackUri,
+          trackName: room.lastSpotifyPlay.trackName,
+          artistName: room.lastSpotifyPlay.artistName,
+          albumArt: room.lastSpotifyPlay.albumArt,
+          positionMs: room.lastSpotifyPlay.positionMs + elapsed,
+          startAt: Date.now() + 500,
+        });
         return;
       }
 
@@ -192,6 +223,17 @@ export function setupWebSocket(server: Server) {
         }
         const room = getRoom(myRoomCode);
         if (!room) return;
+
+        // Snapshot the state so late/backgrounded listeners can re-sync
+        room.lastSpotifyPlay = {
+          trackUri: msg.trackUri,
+          trackName: msg.trackName,
+          artistName: msg.artistName,
+          albumArt: msg.albumArt,
+          positionMs: msg.positionMs,
+          sentAt: Date.now(),
+        };
+
         const payload = {
           type: "spotify-play",
           trackUri: msg.trackUri,
@@ -211,6 +253,7 @@ export function setupWebSocket(server: Server) {
         if (!myRoomCode || myRole !== "host") return;
         const room = getRoom(myRoomCode);
         if (!room) return;
+        room.lastSpotifyPlay = null; // clear — host has paused
         if (room.client) send(room.client, { type: "spotify-pause" });
         return;
       }
