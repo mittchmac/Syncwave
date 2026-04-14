@@ -36,8 +36,8 @@ function getWsUrl() {
 }
 
 const POLL_INTERVAL_MS = 2500;
-const RESYNC_INTERVAL_MS = 30_000;
-const SYNC_LEAD_MS = 1500; // how far ahead to schedule playback
+const RESYNC_INTERVAL_MS = 15_000; // re-tighten sync every 15 s
+const SYNC_LEAD_MS = 1200; // scheduling lead for listener playback
 
 export default function MusicSync() {
   // ── Core state ─────────────────────────────────────────────────────────────
@@ -96,6 +96,7 @@ export default function MusicSync() {
   const spotifyPlayerRef = useRef<SpotifyPlayer | null>(null);
   const spotifyDeviceIdRef = useRef<string | null>(null);
   const pendingSpotifyPlayRef = useRef<{ uri: string; positionMs: number; startAt: number } | null>(null);
+  const listenerCurrentTrackRef = useRef<string | null>(null); // track URI currently loaded in the SDK player
   // Polling refs
   const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastTrackUriRef = useRef<string | null>(null);
@@ -220,11 +221,32 @@ export default function MusicSync() {
       return;
     }
 
+    const isSameTrack = listenerCurrentTrackRef.current === uri;
+    const player = spotifyPlayerRef.current;
+
+    if (isSameTrack && player) {
+      // ── Fast path: track already loaded — use the local SDK seek ──────────
+      // player.seek() is a local call (~10 ms) vs the REST API (~200-400 ms).
+      // Wait until startAt, then correct for any remaining execution delay.
+      const waitMs = Math.max(0, delay);
+      setTimeout(async () => {
+        const driftMs = Date.now() - startAt; // positive = we fired late
+        const target = positionMs + Math.max(0, driftMs);
+        try {
+          await player.seek(target);
+          setSpotifyPlaying(true);
+        } catch { /* ignore */ }
+      }, waitMs);
+      return;
+    }
+
+    // ── Slow path: new track — must use the REST playTrack API ────────────
     const doPlay = async (adjustedPositionMs: number) => {
       try {
         const token = await getValidToken();
         if (!token || !spotifyDeviceIdRef.current) return;
         await playTrack(token, spotifyDeviceIdRef.current, uri, adjustedPositionMs);
+        listenerCurrentTrackRef.current = uri;
         setSpotifyPlaying(true);
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Spotify playback failed.";
@@ -233,9 +255,13 @@ export default function MusicSync() {
       }
     };
 
-    if (delay > 150) {
-      setTimeout(() => doPlay(positionMs), delay - 100);
+    // Fire the API call ~200 ms before startAt to absorb REST call latency.
+    // The position is already set to positionMs (the target at startAt).
+    const fireMs = Math.max(0, delay - 200);
+    if (fireMs > 0) {
+      setTimeout(() => doPlay(positionMs), fireMs);
     } else {
+      // Already past startAt — add elapsed time to catch up
       const elapsed = Math.max(0, -delay);
       await doPlay(positionMs + elapsed);
     }
@@ -259,7 +285,12 @@ export default function MusicSync() {
     const token = await getValidToken();
     if (!token) return;
 
+    // Measure round-trip latency of the Spotify API call so we can correct
+    // for the stale `progress_ms` value (Spotify reports position at the time
+    // it processed the request, not when we receive the response).
+    const apiCallStart = Date.now();
     const state = await getCurrentPlayback(token);
+    const apiLatencyMs = Date.now() - apiCallStart;
 
     if (!state || !state.item) {
       setNoActivePlayback(true);
@@ -268,6 +299,11 @@ export default function MusicSync() {
     setNoActivePlayback(false);
 
     const { is_playing, progress_ms, item } = state;
+    // Best-estimate of the true current position after accounting for how long
+    // the HTTP round-trip took (the reported position is from when the server
+    // processed the request, so roughly half-trip ago — we use full latency to
+    // be safe and avoid the listener being behind)
+    const estimatedPositionMs = progress_ms + apiLatencyMs;
     const trackUri = item.uri;
     const trackName = item.name;
     const artistName = item.artists[0]?.name ?? "";
@@ -283,7 +319,7 @@ export default function MusicSync() {
 
       if (trackChanged || playStateChanged || timeForResync) {
         const startAt = Date.now() + SYNC_LEAD_MS;
-        const syncedPositionMs = progress_ms + SYNC_LEAD_MS;
+        const syncedPositionMs = estimatedPositionMs + SYNC_LEAD_MS;
 
         send({
           type: "spotify-play",
