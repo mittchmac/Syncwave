@@ -9,9 +9,11 @@ import {
   getRooms,
 } from "./rooms";
 
-// Grace period before the room is actually deleted after the host drops
-// iOS freezes backgrounded tabs — give the host 2 min to come back
-const HOST_GRACE_MS = 120_000;
+// Grace period before the room is actually deleted after the host drops.
+// The host spends most of their time in the Spotify app, not in SyncWave.
+// iOS / Android will freeze the browser tab aggressively — 10 minutes gives
+// plenty of room to switch back, even after locking the phone for a song or two.
+const HOST_GRACE_MS = 600_000; // 10 minutes
 
 type WsMessage =
   | { type: "create-room"; mode?: "mp3" | "spotify" }
@@ -127,7 +129,13 @@ export function setupWebSocket(server: Server) {
           send(ws, { type: "error", message: "Room not found" });
           return;
         }
-        if (room.client) {
+        // Allow rejoin if the existing client socket is already dead (stale reference
+        // from a previous connection that closed before the server processed the new one)
+        const existingDead =
+          room.client &&
+          (room.client.readyState === WebSocket.CLOSED ||
+            room.client.readyState === WebSocket.CLOSING);
+        if (room.client && !existingDead) {
           send(ws, { type: "error", message: "Room is full" });
           return;
         }
@@ -143,6 +151,7 @@ export function setupWebSocket(server: Server) {
           mode: room.mode,
           hasAudio: !!room.audioData,
           audioName: room.audioName,
+          hostConnected: room.hostConnected,
         };
         if (room.lastSpotifyPlay) {
           joinedPayload.lastSpotifyPlay = {

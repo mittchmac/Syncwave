@@ -392,6 +392,8 @@ export default function MusicSync() {
         setRoomMode(msg.mode);
         setPhase("joined");
         myPhaseRef.current = "joined";
+        // Room exists → host's session is alive; clear any stale disconnect banner
+        if (msg.hostConnected !== false) setHostDisconnected(false);
         if (msg.mode === "spotify") setShouldInitSdk(true);
         if (msg.mode === "mp3" && msg.hasAudio && msg.audioName) {
           setAudioName(msg.audioName);
@@ -433,6 +435,7 @@ export default function MusicSync() {
         seekTo(msg.position);
 
       } else if (msg.type === "spotify-play" || msg.type === "sync-state") {
+        setHostDisconnected(false); // host is clearly back
         setNowPlaying({ uri: msg.trackUri, name: msg.trackName, artist: msg.artistName, albumArt: msg.albumArt });
         setSpotifyPlaying(true);
         // Cache so we can re-sync when the tab comes back to the foreground
@@ -882,8 +885,11 @@ export default function MusicSync() {
           </div>
         )}
         {hostDisconnected && (
-          <div className="bg-destructive/20 border border-destructive/40 rounded-xl px-4 py-3 text-destructive-foreground text-sm text-center">
-            Host disconnected. Session ended.
+          <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-4 py-3 flex items-center justify-between gap-2">
+            <span className="text-yellow-300 text-sm">Host stepped away — waiting to reconnect…</span>
+            <button onClick={() => setHostDisconnected(false)} className="text-yellow-400 hover:text-yellow-200 flex-shrink-0">
+              <X className="w-4 h-4" />
+            </button>
           </div>
         )}
 
