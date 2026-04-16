@@ -36,7 +36,8 @@ type WsMessage =
   | { type: "spotify-pause" }
   | { type: "spotify-seek"; positionMs: number }
   | { type: "radio-play"; streamUrl: string; stationName: string; favicon: string }
-  | { type: "radio-stop" };
+  | { type: "radio-stop" }
+  | { type: "request-resync" };
 
 function send(ws: WebSocket, data: object) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -178,17 +179,33 @@ export function setupWebSocket(server: Server) {
       if (msg.type === "request-sync") {
         if (!myRoomCode || myRole !== "client") return;
         const room = getRoom(myRoomCode);
-        if (!room || !room.lastSpotifyPlay) return;
-        const elapsed = Date.now() - room.lastSpotifyPlay.sentAt;
-        send(ws, {
-          type: "sync-state",
-          trackUri: room.lastSpotifyPlay.trackUri,
-          trackName: room.lastSpotifyPlay.trackName,
-          artistName: room.lastSpotifyPlay.artistName,
-          albumArt: room.lastSpotifyPlay.albumArt,
-          positionMs: room.lastSpotifyPlay.positionMs + elapsed,
-          startAt: Date.now() + 500,
-        });
+        if (!room) return;
+        // Spotify: reply directly from cached state
+        if (room.lastSpotifyPlay) {
+          const elapsed = Date.now() - room.lastSpotifyPlay.sentAt;
+          send(ws, {
+            type: "sync-state",
+            trackUri: room.lastSpotifyPlay.trackUri,
+            trackName: room.lastSpotifyPlay.trackName,
+            artistName: room.lastSpotifyPlay.artistName,
+            albumArt: room.lastSpotifyPlay.albumArt,
+            positionMs: room.lastSpotifyPlay.positionMs + elapsed,
+            startAt: Date.now() + 500,
+          });
+        }
+        // Radio: reply with last station
+        if (room.lastRadioPlay) {
+          send(ws, { type: "radio-play", ...room.lastRadioPlay });
+        }
+        return;
+      }
+
+      // Listener asks host to re-broadcast its current MP3 position (force-sync)
+      if (msg.type === "request-resync") {
+        if (!myRoomCode || myRole !== "client") return;
+        const room = getRoom(myRoomCode);
+        if (!room || !room.host) return;
+        send(room.host, { type: "resync-requested" });
         return;
       }
 

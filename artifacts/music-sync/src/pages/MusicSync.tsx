@@ -32,6 +32,7 @@ type WsEvent =
   | { type: "spotify-seek"; positionMs: number }
   | { type: "radio-play"; streamUrl: string; stationName: string; favicon: string }
   | { type: "radio-stop" }
+  | { type: "resync-requested" }
   | { type: "error"; message: string };
 
 function getWsUrl() {
@@ -96,6 +97,8 @@ export default function MusicSync() {
   const wsRef = useRef<WebSocket | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const radioAudioRef = useRef<HTMLAudioElement | null>(null);
+  // Mirrors audioTime for stale-closure reads (isPlayingRef already exists above)
+  const audioTimeRef = useRef(0);
   const myRoomCodeRef = useRef<string>("");
   const myPhaseRef = useRef<Phase>("idle");
   const roomModeRef = useRef<RoomMode>("mp3");
@@ -510,6 +513,18 @@ export default function MusicSync() {
       } else if (msg.type === "spotify-seek") {
         execSpotifySeek(msg.positionMs);
 
+      } else if (msg.type === "resync-requested") {
+        // Listener asked host to re-broadcast current MP3 position
+        if (myPhaseRef.current !== "hosting" || roomModeRef.current !== "mp3") return;
+        const pos = audioTimeRef.current;
+        const ws2 = wsRef.current;
+        if (!ws2 || ws2.readyState !== WebSocket.OPEN) return;
+        // Seek listener to current position, then play if currently playing
+        ws2.send(JSON.stringify({ type: "seek", position: pos }));
+        if (isPlayingRef.current) {
+          ws2.send(JSON.stringify({ type: "play", startAt: Date.now() + 400 }));
+        }
+
       } else if (msg.type === "error") {
         showError((msg as { type: "error"; message: string }).message);
       }
@@ -541,6 +556,10 @@ export default function MusicSync() {
     const timer = setTimeout(() => connectWs(), 2_000);
     return () => clearTimeout(timer);
   }, [connStatus, connectWs]);
+
+  // ── Keep playback refs current (for stale-closure reads in connectWs) ───────
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+  useEffect(() => { audioTimeRef.current = audioTime; }, [audioTime]);
 
   // ── Leave-room confirmation on refresh / navigation ───────────────────────
   useEffect(() => {
@@ -890,6 +909,34 @@ export default function MusicSync() {
     send({ type: "radio-stop" });
   };
 
+  // ── Force Sync ─────────────────────────────────────────────────────────────
+  const handleForceSync = () => {
+    if (phase === "hosting") {
+      if (roomMode === "mp3") {
+        // Re-broadcast current position to listener
+        send({ type: "seek", position: audioTime });
+        if (isPlaying) send({ type: "play", startAt: Date.now() + 400 });
+      } else if (roomMode === "spotify") {
+        // Immediate re-poll (fires the Spotify polling loop once right now)
+        pollAndSync();
+      } else if (roomMode === "radio" && radioStation) {
+        // Re-send the current station to listener
+        send({ type: "radio-play", streamUrl: radioStation.streamUrl, stationName: radioStation.stationName, favicon: radioStation.favicon });
+      }
+    } else if (phase === "joined") {
+      if (roomMode === "mp3") {
+        // Ask host to re-broadcast its current position
+        send({ type: "request-resync" });
+      } else if (roomMode === "spotify") {
+        // Server replies with the latest track state
+        send({ type: "request-sync" });
+      } else if (roomMode === "radio" && radioStation) {
+        // Restart the stream locally
+        playRadioStream(radioStation.streamUrl, radioStation.stationName, radioStation.favicon);
+      }
+    }
+  };
+
   const copyCode = () => {
     navigator.clipboard.writeText(roomCode).then(() => {
       setCopied(true);
@@ -1232,6 +1279,12 @@ export default function MusicSync() {
                     </button>
                   )}
                 </div>
+                <button
+                  onClick={handleForceSync}
+                  className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-secondary/60 text-muted-foreground text-xs font-medium hover:bg-accent hover:text-foreground active:scale-[0.97] transition-all"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Force Sync
+                </button>
               </div>
             )}
           </div>
@@ -1295,12 +1348,20 @@ export default function MusicSync() {
                   Start Syncing
                 </button>
               ) : (
-                <button
-                  onClick={handleStopSync}
-                  className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-secondary text-secondary-foreground font-semibold hover:bg-accent active:scale-[0.97] transition-all"
-                >
-                  <Pause className="w-4 h-4" /> Stop Syncing
-                </button>
+                <>
+                  <button
+                    onClick={handleStopSync}
+                    className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-secondary text-secondary-foreground font-semibold hover:bg-accent active:scale-[0.97] transition-all"
+                  >
+                    <Pause className="w-4 h-4" /> Stop Syncing
+                  </button>
+                  <button
+                    onClick={handleForceSync}
+                    className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-secondary/60 text-muted-foreground text-xs font-medium hover:bg-accent hover:text-foreground active:scale-[0.97] transition-all"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" /> Force Sync
+                  </button>
+                </>
               )}
 
               <p className="text-xs text-muted-foreground text-center">
@@ -1373,6 +1434,16 @@ export default function MusicSync() {
                   <span className="text-destructive text-xs flex-1">{radioError}</span>
                   <button onClick={() => setRadioError(null)}><X className="w-3.5 h-3.5 text-destructive mt-0.5" /></button>
                 </div>
+              )}
+
+              {/* Force Sync when a station is playing */}
+              {radioStation && (
+                <button
+                  onClick={handleForceSync}
+                  className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-secondary/60 text-muted-foreground text-xs font-medium hover:bg-accent hover:text-foreground active:scale-[0.97] transition-all"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Force Sync
+                </button>
               )}
 
               {/* Genre picker */}
@@ -1497,6 +1568,12 @@ export default function MusicSync() {
                     <div className={`text-center text-xs font-medium ${isPlaying ? "text-green-400" : "text-muted-foreground"}`}>
                       {isPlaying ? "▶ Playing in sync" : "Waiting for host to play..."}
                     </div>
+                    <button
+                      onClick={handleForceSync}
+                      className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-secondary/60 text-muted-foreground text-xs font-medium hover:bg-accent hover:text-foreground active:scale-[0.97] transition-all"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" /> Force Sync
+                    </button>
                   </>
                 ) : (
                   <div className="text-center py-6">
@@ -1570,6 +1647,13 @@ export default function MusicSync() {
                         ▶ Playing in sync
                       </div>
                     )}
+
+                    <button
+                      onClick={handleForceSync}
+                      className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-secondary/60 text-muted-foreground text-xs font-medium hover:bg-accent hover:text-foreground active:scale-[0.97] transition-all"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" /> Force Sync
+                    </button>
                   </div>
                 ) : (
                   <div className="text-center py-6">
@@ -1639,6 +1723,15 @@ export default function MusicSync() {
                         </div>
                         <p className="text-sm text-muted-foreground">Waiting for host to start syncing…</p>
                       </div>
+                    )}
+
+                    {spotifyActivated && (
+                      <button
+                        onClick={handleForceSync}
+                        className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-secondary/60 text-muted-foreground text-xs font-medium hover:bg-accent hover:text-foreground active:scale-[0.97] transition-all"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" /> Force Sync
+                      </button>
                     )}
 
                     {spotifyActivated && (
