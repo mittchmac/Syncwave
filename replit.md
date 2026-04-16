@@ -35,6 +35,12 @@ Synchronized music playback app "SyncWave". Supports two modes:
 - Critical: Web Audio API only, NOT HTMLAudioElement (blocked by iOS Safari from WS callbacks)
 - AudioContext must be unlocked via user gesture ("Tap to Enable Audio" screen)
 
+**Radio mode:** Host picks a live radio station from Radio Browser API (no login needed). Both host and listener play the same stream URL simultaneously.
+- `artifacts/music-sync/src/lib/radioBrowser.ts` — `fetchStationsByTag()`, `FEATURED_GENRES` (14 genres), HTTPS-only filter
+- Host selects genre → station list → picks station → sends `radio-play` WS message → listener auto-plays
+- Server stores `lastRadioPlay` in room; sent in `joined-room` for mid-session joins
+- HTMLAudioElement used (not Web Audio API — radio is live streaming, not file sync)
+
 **Spotify mode:** Both devices log into Spotify, host searches a track, both play via Spotify Web Playback SDK.
 - PKCE OAuth flow (no client secret needed) — `artifacts/music-sync/src/lib/spotify.ts`
 - `VITE_SPOTIFY_CLIENT_ID` secret required (from developer.spotify.com)
@@ -45,8 +51,8 @@ Synchronized music playback app "SyncWave". Supports two modes:
 
 ### api-server (Express 5, port 8080, preview at `/api`, WebSocket at `/ws`)
 - WebSocket server: `artifacts/api-server/src/lib/websocket.ts`
-- Room state: `artifacts/api-server/src/lib/rooms.ts` — includes `mode: "mp3" | "spotify"` field
+- Room state: `artifacts/api-server/src/lib/rooms.ts` — includes `mode: "mp3" | "spotify" | "radio"`, `lastSpotifyPlay`, `lastRadioPlay` fields
 - Audio upload/serve: `artifacts/api-server/src/routes/audio.ts` (multer, in-memory)
-- WebSocket messages: `create-room` (with mode), `join-room`, `play`, `pause`, `seek`, `audio-ready`, `spotify-play`, `spotify-pause`, `spotify-seek`
+- WebSocket messages: `create-room` (with mode), `join-room`, `play`, `pause`, `seek`, `audio-ready`, `spotify-play`, `spotify-pause`, `spotify-seek`, `radio-play`, `radio-stop`
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.

@@ -8,14 +8,15 @@ import {
   loadSpotifySdk, createSpotifyPlayer, playTrack, pauseTrack, getCurrentPlayback,
   type SpotifyPlayer,
 } from "../lib/spotify";
+import { fetchStationsByTag, FEATURED_GENRES, type RadioStation } from "../lib/radioBrowser";
 
 type Phase = "idle" | "creating" | "hosting" | "joining" | "joined";
 type ConnectionStatus = "disconnected" | "connecting" | "connected";
-type RoomMode = "mp3" | "spotify";
+type RoomMode = "mp3" | "spotify" | "radio";
 
 type WsEvent =
   | { type: "room-created"; code: string; mode: RoomMode }
-  | { type: "joined-room"; code: string; mode: RoomMode; hasAudio: boolean; audioName: string | null }
+  | { type: "joined-room"; code: string; mode: RoomMode; hasAudio: boolean; audioName: string | null; hostConnected?: boolean; lastSpotifyPlay?: unknown; lastRadioPlay?: { streamUrl: string; stationName: string; favicon: string } }
   | { type: "client-joined" }
   | { type: "client-disconnected" }
   | { type: "host-disconnected" }
@@ -26,8 +27,11 @@ type WsEvent =
   | { type: "pause" }
   | { type: "seek"; position: number }
   | { type: "spotify-play"; trackUri: string; trackName: string; artistName: string; albumArt: string; positionMs: number; startAt: number }
+  | { type: "sync-state"; trackUri: string; trackName: string; artistName: string; albumArt: string; positionMs: number; startAt: number }
   | { type: "spotify-pause" }
   | { type: "spotify-seek"; positionMs: number }
+  | { type: "radio-play"; streamUrl: string; stationName: string; favicon: string }
+  | { type: "radio-stop" }
   | { type: "error"; message: string };
 
 function getWsUrl() {
@@ -50,6 +54,14 @@ export default function MusicSync() {
   const [choosingMode, setChoosingMode] = useState(false);
   const [clientConnected, setClientConnected] = useState(false);
   const [hostDisconnected, setHostDisconnected] = useState(false);
+
+  // ── Radio state ────────────────────────────────────────────────────────────
+  const [radioStation, setRadioStation] = useState<{ streamUrl: string; stationName: string; favicon: string } | null>(null);
+  const [radioPlaying, setRadioPlaying] = useState(false);
+  const [radioStations, setRadioStations] = useState<RadioStation[]>([]);
+  const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
+  const [radioLoading, setRadioLoading] = useState(false);
+  const [radioError, setRadioError] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -83,6 +95,7 @@ export default function MusicSync() {
   // ── Refs ───────────────────────────────────────────────────────────────────
   const wsRef = useRef<WebSocket | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const radioAudioRef = useRef<HTMLAudioElement | null>(null);
   const myRoomCodeRef = useRef<string>("");
   const myPhaseRef = useRef<Phase>("idle");
   const roomModeRef = useRef<RoomMode>("mp3");
@@ -443,14 +456,28 @@ export default function MusicSync() {
           setSpotifyPlaying(true);
           execSpotifyPlay(lsp.trackUri, lsp.positionMs, lsp.startAt);
         }
+        // If radio is already playing, start it for the joining listener
+        if (msg.lastRadioPlay) {
+          const { streamUrl, stationName, favicon } = msg.lastRadioPlay;
+          playRadioStream(streamUrl, stationName, favicon);
+        }
 
       } else if (msg.type === "client-joined") {
         setClientConnected(true);
       } else if (msg.type === "client-disconnected") {
         setClientConnected(false);
+      } else if (msg.type === "radio-play") {
+        playRadioStream(msg.streamUrl, msg.stationName, msg.favicon);
+        setHostDisconnected(false);
+
+      } else if (msg.type === "radio-stop") {
+        stopRadioAudio();
+        setRadioStation(null);
+
       } else if (msg.type === "host-disconnected") {
         setHostDisconnected(true);
         if (roomModeRef.current === "mp3") pauseNow();
+        else if (roomModeRef.current === "radio") stopRadioAudio();
         else { setSpotifyPlaying(false); setNowPlaying(null); }
 
       } else if (msg.type === "host-reconnected") {
@@ -778,6 +805,65 @@ export default function MusicSync() {
     } catch { /* ignore */ }
   };
 
+  // ── Handlers: Radio ────────────────────────────────────────────────────────
+  const stopRadioAudio = () => {
+    if (radioAudioRef.current) {
+      radioAudioRef.current.pause();
+      radioAudioRef.current.src = "";
+      radioAudioRef.current = null;
+    }
+    setRadioPlaying(false);
+  };
+
+  const playRadioStream = (streamUrl: string, stationName: string, favicon: string) => {
+    stopRadioAudio();
+    const audio = new Audio(streamUrl);
+    audio.crossOrigin = "anonymous";
+    radioAudioRef.current = audio;
+    setRadioStation({ streamUrl, stationName, favicon });
+    setRadioPlaying(true);
+    audio.play().catch(() => {
+      setRadioError("Could not play this station — it may be offline or blocked by CORS. Try another.");
+      setRadioPlaying(false);
+    });
+    audio.onerror = () => {
+      setRadioError("Stream error — station may be offline. Try another.");
+      setRadioPlaying(false);
+    };
+  };
+
+  const handleCreateRadioRoom = () => {
+    if (connStatus !== "connected") return;
+    setChoosingMode(false);
+    send({ type: "create-room", mode: "radio" });
+  };
+
+  const handleSelectGenre = async (tag: string) => {
+    setSelectedGenre(tag);
+    setRadioStations([]);
+    setRadioLoading(true);
+    setRadioError(null);
+    const stations = await fetchStationsByTag(tag);
+    setRadioLoading(false);
+    if (stations.length === 0) {
+      setRadioError("No stations found for this genre. Try another.");
+    } else {
+      setRadioStations(stations);
+    }
+  };
+
+  const handleSelectStation = (station: RadioStation) => {
+    setRadioError(null);
+    playRadioStream(station.url_resolved, station.name, station.favicon);
+    send({ type: "radio-play", streamUrl: station.url_resolved, stationName: station.name, favicon: station.favicon });
+  };
+
+  const handleStopRadio = () => {
+    stopRadioAudio();
+    setRadioStation(null);
+    send({ type: "radio-stop" });
+  };
+
   const copyCode = () => {
     navigator.clipboard.writeText(roomCode).then(() => {
       setCopied(true);
@@ -1003,6 +1089,19 @@ export default function MusicSync() {
                 </p>
               </div>
             </button>
+
+            <button
+              onClick={handleCreateRadioRoom}
+              className="w-full flex items-center gap-4 p-4 rounded-xl border-2 border-border hover:border-primary/50 hover:bg-accent/30 active:scale-[0.98] transition-all text-left"
+            >
+              <div className="w-12 h-12 rounded-xl bg-primary/20 flex items-center justify-center flex-shrink-0">
+                <Radio className="w-6 h-6 text-primary" />
+              </div>
+              <div>
+                <p className="font-semibold text-sm">Radio Stations</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Stream live radio · pick a genre and station · free, no login</p>
+              </div>
+            </button>
           </div>
         )}
 
@@ -1174,12 +1273,154 @@ export default function MusicSync() {
           </div>
         )}
 
+        {/* ── HOSTING: Radio ── */}
+        {phase === "hosting" && roomMode === "radio" && (
+          <div className="space-y-4">
+            <RoomCodeCard />
+
+            <div className="bg-card border border-card-border rounded-2xl p-6 space-y-4 shadow-lg">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold flex items-center gap-2">
+                  <Radio className="w-4 h-4 text-primary" /> Radio Stations
+                </h3>
+                {radioStation && (
+                  <button
+                    onClick={handleStopRadio}
+                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-secondary hover:bg-accent text-secondary-foreground transition-colors"
+                  >
+                    <Pause className="w-3 h-3" /> Stop
+                  </button>
+                )}
+              </div>
+
+              {/* Now playing */}
+              {radioStation && (
+                <div className="flex items-center gap-3 bg-accent/30 rounded-xl p-3">
+                  {radioStation.favicon ? (
+                    <img
+                      src={radioStation.favicon}
+                      alt=""
+                      className="w-10 h-10 rounded-lg object-cover flex-shrink-0 bg-secondary"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                    />
+                  ) : (
+                    <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center flex-shrink-0">
+                      <Radio className="w-5 h-5 text-primary" />
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold truncate">{radioStation.stationName}</p>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      {radioPlaying ? (
+                        <span className="flex items-center gap-1 text-xs text-red-400 font-medium">
+                          <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse inline-block" />
+                          LIVE
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">Stopped</span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setRadioStation(null)}
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors flex-shrink-0 px-2 py-1"
+                  >
+                    Change
+                  </button>
+                </div>
+              )}
+
+              {/* Radio error */}
+              {radioError && (
+                <div className="flex items-start gap-2 bg-destructive/10 border border-destructive/30 rounded-xl px-3 py-2.5">
+                  <span className="text-destructive text-xs flex-1">{radioError}</span>
+                  <button onClick={() => setRadioError(null)}><X className="w-3.5 h-3.5 text-destructive mt-0.5" /></button>
+                </div>
+              )}
+
+              {/* Genre picker */}
+              {!radioStation && (
+                <>
+                  <p className="text-xs text-muted-foreground font-medium">Pick a genre</p>
+                  <div className="flex flex-wrap gap-2">
+                    {FEATURED_GENRES.map((g) => (
+                      <button
+                        key={g.tag}
+                        onClick={() => handleSelectGenre(g.tag)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all active:scale-95
+                          ${selectedGenre === g.tag
+                            ? "bg-primary text-primary-foreground shadow"
+                            : "bg-secondary text-secondary-foreground hover:bg-accent"
+                          }`}
+                      >
+                        <span>{g.emoji}</span> {g.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Station list */}
+                  {radioLoading && (
+                    <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
+                      <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                      Loading stations…
+                    </div>
+                  )}
+
+                  {!radioLoading && radioStations.length > 0 && (
+                    <div className="space-y-1 max-h-56 overflow-y-auto -mx-1 px-1">
+                      {radioStations.map((station) => (
+                        <button
+                          key={station.stationuuid}
+                          onClick={() => handleSelectStation(station)}
+                          className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-accent/50 active:scale-[0.98] transition-all text-left"
+                        >
+                          {station.favicon ? (
+                            <img
+                              src={station.favicon}
+                              alt=""
+                              className="w-8 h-8 rounded-lg object-cover flex-shrink-0 bg-secondary"
+                              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                            />
+                          ) : (
+                            <div className="w-8 h-8 rounded-lg bg-secondary flex items-center justify-center flex-shrink-0">
+                              <Radio className="w-4 h-4 text-muted-foreground" />
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">{station.name}</p>
+                            <p className="text-xs text-muted-foreground truncate">
+                              {station.country}{station.bitrate > 0 ? ` · ${station.bitrate}kbps` : ""}
+                            </p>
+                          </div>
+                          <Play className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {!radioLoading && !selectedGenre && (
+                    <p className="text-center text-xs text-muted-foreground py-4">
+                      Select a genre above to browse stations
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* ── JOINED (listener) ── */}
         {phase === "joined" && (
           <div className="space-y-4">
             <div className="bg-card border border-card-border rounded-2xl p-6 text-center space-y-3 shadow-lg">
               <div className="flex items-center justify-center gap-2 text-muted-foreground text-xs font-medium uppercase tracking-widest">
-                {roomMode === "spotify" ? <span className="text-[#1DB954]">● Spotify Room</span> : <><Music className="w-3.5 h-3.5" /> MP3 Room</>}
+                {roomMode === "spotify" ? (
+                  <span className="text-[#1DB954]">● Spotify Room</span>
+                ) : roomMode === "radio" ? (
+                  <span className="flex items-center gap-1.5 text-primary"><Radio className="w-3.5 h-3.5" /> Radio Room</span>
+                ) : (
+                  <><Music className="w-3.5 h-3.5" /> MP3 Room</>
+                )}
               </div>
               <div className="text-4xl font-mono font-bold text-primary tracking-widest">{roomCode}</div>
               <div className="flex items-center justify-center gap-2 text-xs font-medium text-green-400">
@@ -1226,6 +1467,57 @@ export default function MusicSync() {
                       <Music className="w-5 h-5 text-muted-foreground" />
                     </div>
                     <p className="text-sm text-muted-foreground">Waiting for host to upload a track...</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Radio listener */}
+            {roomMode === "radio" && (
+              <div className="bg-card border border-card-border rounded-2xl p-6 space-y-4 shadow-lg">
+                {radioStation ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3 bg-accent/30 rounded-xl p-3">
+                      {radioStation.favicon ? (
+                        <img
+                          src={radioStation.favicon}
+                          alt=""
+                          className="w-12 h-12 rounded-xl object-cover flex-shrink-0 bg-secondary"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                        />
+                      ) : (
+                        <div className="w-12 h-12 rounded-xl bg-primary/20 flex items-center justify-center flex-shrink-0">
+                          <Radio className="w-6 h-6 text-primary" />
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold truncate">{radioStation.stationName}</p>
+                        {radioPlaying ? (
+                          <span className="flex items-center gap-1.5 text-xs text-red-400 font-medium mt-0.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse inline-block" />
+                            LIVE
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground mt-0.5 block">Connecting…</span>
+                        )}
+                      </div>
+                    </div>
+                    {radioError && (
+                      <div className="flex items-start gap-2 bg-destructive/10 border border-destructive/30 rounded-xl px-3 py-2.5">
+                        <span className="text-destructive text-xs flex-1">{radioError}</span>
+                        <button onClick={() => setRadioError(null)}><X className="w-3.5 h-3.5 text-destructive mt-0.5" /></button>
+                      </div>
+                    )}
+                    <div className={`text-center text-xs font-medium ${radioPlaying ? "text-green-400" : "text-muted-foreground"}`}>
+                      {radioPlaying ? "▶ Playing in sync" : "Buffering…"}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-6">
+                    <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center mx-auto mb-3">
+                      <Radio className="w-6 h-6 text-primary" />
+                    </div>
+                    <p className="text-sm text-muted-foreground">Waiting for host to pick a station…</p>
                   </div>
                 )}
               </div>

@@ -34,7 +34,9 @@ type WsMessage =
       startAt: number;
     }
   | { type: "spotify-pause" }
-  | { type: "spotify-seek"; positionMs: number };
+  | { type: "spotify-seek"; positionMs: number }
+  | { type: "radio-play"; streamUrl: string; stationName: string; favicon: string }
+  | { type: "radio-stop" };
 
 function send(ws: WebSocket, data: object) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -156,11 +158,13 @@ export function setupWebSocket(server: Server) {
         if (room.lastSpotifyPlay) {
           joinedPayload.lastSpotifyPlay = {
             ...room.lastSpotifyPlay,
-            // re-stamp so the client can compute elapsed time accurately
             sentAt: Date.now(),
             positionMs: room.lastSpotifyPlay.positionMs +
               (Date.now() - room.lastSpotifyPlay.sentAt),
           };
+        }
+        if (room.lastRadioPlay) {
+          joinedPayload.lastRadioPlay = room.lastRadioPlay;
         }
         send(ws, joinedPayload);
         if (room.host) {
@@ -272,6 +276,26 @@ export function setupWebSocket(server: Server) {
         const room = getRoom(myRoomCode);
         if (!room) return;
         if (room.client) send(room.client, { type: "spotify-seek", positionMs: msg.positionMs });
+        return;
+      }
+
+      if (msg.type === "radio-play") {
+        if (!myRoomCode || myRole !== "host") return;
+        const room = getRoom(myRoomCode);
+        if (!room) return;
+        room.lastRadioPlay = { streamUrl: msg.streamUrl, stationName: msg.stationName, favicon: msg.favicon };
+        const payload = { type: "radio-play", streamUrl: msg.streamUrl, stationName: msg.stationName, favicon: msg.favicon };
+        if (room.client) send(room.client, payload);
+        logger.info({ stationName: msg.stationName }, "Radio play broadcast");
+        return;
+      }
+
+      if (msg.type === "radio-stop") {
+        if (!myRoomCode || myRole !== "host") return;
+        const room = getRoom(myRoomCode);
+        if (!room) return;
+        room.lastRadioPlay = null;
+        if (room.client) send(room.client, { type: "radio-stop" });
         return;
       }
     });
