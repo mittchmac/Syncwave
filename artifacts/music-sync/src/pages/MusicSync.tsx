@@ -542,6 +542,20 @@ export default function MusicSync() {
     return () => clearTimeout(timer);
   }, [connStatus, connectWs]);
 
+  // ── Leave-room confirmation on refresh / navigation ───────────────────────
+  useEffect(() => {
+    const guard = (e: BeforeUnloadEvent) => {
+      const phase = myPhaseRef.current;
+      if (phase === "hosting" || phase === "joined") {
+        // Triggers the browser's built-in "Leave site?" dialog
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, []); // stable — reads only refs
+
   // ── Mount: handle Spotify OAuth callback or stored token ───────────────────
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
