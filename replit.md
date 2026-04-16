@@ -35,11 +35,16 @@ Synchronized music playback app "SyncWave". Supports two modes:
 - Critical: Web Audio API only, NOT HTMLAudioElement (blocked by iOS Safari from WS callbacks)
 - AudioContext must be unlocked via user gesture ("Tap to Enable Audio" screen)
 
-**Radio mode:** Host picks a live radio station from Radio Browser API (no login needed). Both host and listener play the same stream URL simultaneously.
-- `artifacts/music-sync/src/lib/radioBrowser.ts` — `fetchStationsByTag()`, `FEATURED_GENRES` (14 genres), HTTPS-only filter
-- Host selects genre → station list → picks station → sends `radio-play` WS message → listener auto-plays
+**Radio mode:** Host picks a live US radio station from Radio Browser API (no login needed). Both host and listener play the same stream URL simultaneously.
+- `artifacts/music-sync/src/lib/radioBrowser.ts` — `fetchStationsByTag()`, `fetchTopUSStations()`, `searchStationsByName()`, `FEATURED_GENRES` (16 US genres), HTTPS-only, deduplication
+- US-only filtering enforced (no global/English fallbacks); automatic mirror failover
+- Station picker has: search bar (debounced 500ms), ⭐ Top Stations category, 16 genre chips, 🇺🇸 US Only badge
+- Station list shows state + bitrate; duplicates removed by name normalisation
+- Host selects genre/searches → station list → picks station → sends `radio-play` WS message → listener auto-plays
 - Server stores `lastRadioPlay` in room; sent in `joined-room` for mid-session joins
 - HTMLAudioElement used (not Web Audio API — radio is live streaming, not file sync)
+
+**Apple Music:** Coming Soon button in mode picker (requires Apple Developer account — MusicKit JS + developer JWT token)
 
 **Spotify mode:** Both devices log into Spotify, host searches a track, both play via Spotify Web Playback SDK.
 - PKCE OAuth flow (no client secret needed) — `artifacts/music-sync/src/lib/spotify.ts`

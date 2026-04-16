@@ -8,7 +8,7 @@ import {
   loadSpotifySdk, createSpotifyPlayer, playTrack, pauseTrack, getCurrentPlayback,
   type SpotifyPlayer,
 } from "../lib/spotify";
-import { fetchStationsByTag, FEATURED_GENRES, type RadioStation } from "../lib/radioBrowser";
+import { fetchStationsByTag, fetchTopUSStations, searchStationsByName, FEATURED_GENRES, type RadioStation } from "../lib/radioBrowser";
 
 type Phase = "idle" | "creating" | "hosting" | "joining" | "joined";
 type ConnectionStatus = "disconnected" | "connecting" | "connected";
@@ -63,6 +63,8 @@ export default function MusicSync() {
   const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
   const [radioLoading, setRadioLoading] = useState(false);
   const [radioError, setRadioError] = useState<string | null>(null);
+  const [radioSearch, setRadioSearch] = useState("");
+  const [radioSearchActive, setRadioSearchActive] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -889,16 +891,46 @@ export default function MusicSync() {
 
   const handleSelectGenre = async (tag: string) => {
     setSelectedGenre(tag);
+    setRadioSearch("");
+    setRadioSearchActive(false);
     setRadioStations([]);
     setRadioLoading(true);
     setRadioError(null);
-    const stations = await fetchStationsByTag(tag);
+    const stations = tag === "__top__"
+      ? await fetchTopUSStations()
+      : await fetchStationsByTag(tag);
     setRadioLoading(false);
     if (stations.length === 0) {
-      setRadioError("No stations found for this genre. Try another.");
+      setRadioError("No US stations found for this genre. Try another.");
     } else {
       setRadioStations(stations);
     }
+  };
+
+  const radioSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleRadioSearch = (query: string) => {
+    setRadioSearch(query);
+    if (radioSearchTimerRef.current) clearTimeout(radioSearchTimerRef.current);
+    if (!query.trim()) {
+      setRadioSearchActive(false);
+      setRadioStations([]);
+      setRadioError(null);
+      return;
+    }
+    setRadioSearchActive(true);
+    setSelectedGenre(null);
+    radioSearchTimerRef.current = setTimeout(async () => {
+      setRadioLoading(true);
+      setRadioError(null);
+      const stations = await searchStationsByName(query);
+      setRadioLoading(false);
+      if (stations.length === 0) {
+        setRadioError("No US stations matched your search.");
+      } else {
+        setRadioStations(stations);
+      }
+    }, 500);
   };
 
   const handleSelectStation = (station: RadioStation) => {
@@ -1187,9 +1219,25 @@ export default function MusicSync() {
               </div>
               <div>
                 <p className="font-semibold text-sm">Radio Stations</p>
-                <p className="text-xs text-muted-foreground mt-0.5">Stream live radio · pick a genre and station · free, no login</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Stream live US radio · pick a genre and station · free, no login</p>
               </div>
             </button>
+
+            {/* Apple Music — coming soon */}
+            <div className="w-full flex items-center gap-4 p-4 rounded-xl border-2 border-border/40 opacity-50 cursor-not-allowed text-left">
+              <div className="w-12 h-12 rounded-xl bg-secondary flex items-center justify-center flex-shrink-0">
+                <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M23.994 6.124a9.23 9.23 0 0 0-.24-2.19c-.317-1.31-1.064-2.31-2.22-3.09a5.33 5.33 0 0 0-1.64-.64c-.67-.13-1.34-.17-2.01-.17H6.12c-.64 0-1.29.05-1.93.17a5.01 5.01 0 0 0-1.69.71c-1.23.88-1.92 2.07-2.09 3.5C.29 4.88.25 5.53.25 6.18v11.64c0 .63.04 1.26.14 1.88.33 1.85 1.4 3.11 3.16 3.71.48.17.99.24 1.5.27.34.02.68.02 1.02.02h11.86c.38 0 .77-.01 1.15-.04a5.1 5.1 0 0 0 1.6-.38c1.54-.69 2.44-1.9 2.72-3.56.12-.69.15-1.39.15-2.09V6.12l-.01.004zM12 17.77c-3.18 0-5.77-2.59-5.77-5.77S8.82 6.23 12 6.23s5.77 2.59 5.77 5.77-2.59 5.77-5.77 5.77zm0-9.54a3.77 3.77 0 1 0 0 7.54 3.77 3.77 0 0 0 0-7.54zm6.02-3.48a1.35 1.35 0 1 1 0 2.7 1.35 1.35 0 0 1 0-2.7z"/>
+                </svg>
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="font-semibold text-sm">Apple Music</p>
+                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-secondary text-muted-foreground border border-border">Coming Soon</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">Requires Apple Developer account</p>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1450,36 +1498,75 @@ export default function MusicSync() {
                 </button>
               )}
 
-              {/* Genre picker */}
+              {/* Station picker */}
               {!radioStation && (
                 <>
-                  <p className="text-xs text-muted-foreground font-medium">Pick a genre</p>
-                  <div className="flex flex-wrap gap-2">
-                    {FEATURED_GENRES.map((g) => (
-                      <button
-                        key={g.tag}
-                        onClick={() => handleSelectGenre(g.tag)}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all active:scale-95
-                          ${selectedGenre === g.tag
-                            ? "bg-primary text-primary-foreground shadow"
-                            : "bg-secondary text-secondary-foreground hover:bg-accent"
-                          }`}
-                      >
-                        <span>{g.emoji}</span> {g.label}
-                      </button>
-                    ))}
+                  {/* US badge + search */}
+                  <div className="flex items-center gap-2">
+                    <span className="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/20 flex-shrink-0">
+                      🇺🇸 US Only
+                    </span>
+                    <div className="relative flex-1">
+                      <input
+                        type="text"
+                        placeholder="Search stations…"
+                        value={radioSearch}
+                        onChange={(e) => handleRadioSearch(e.target.value)}
+                        className="w-full bg-secondary/60 border border-border rounded-lg px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                      />
+                      {radioSearch && (
+                        <button
+                          onClick={() => { setRadioSearch(""); setRadioSearchActive(false); setRadioStations([]); setRadioError(null); }}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
                   </div>
+
+                  {/* Genre chips — only shown when not searching */}
+                  {!radioSearchActive && (
+                    <>
+                      <p className="text-xs text-muted-foreground font-medium">Browse by genre</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          onClick={() => handleSelectGenre("__top__")}
+                          className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all active:scale-95
+                            ${selectedGenre === "__top__"
+                              ? "bg-primary text-primary-foreground shadow"
+                              : "bg-secondary text-secondary-foreground hover:bg-accent"
+                            }`}
+                        >
+                          ⭐ Top Stations
+                        </button>
+                        {FEATURED_GENRES.map((g) => (
+                          <button
+                            key={g.tag}
+                            onClick={() => handleSelectGenre(g.tag)}
+                            className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all active:scale-95
+                              ${selectedGenre === g.tag
+                                ? "bg-primary text-primary-foreground shadow"
+                                : "bg-secondary text-secondary-foreground hover:bg-accent"
+                              }`}
+                          >
+                            <span>{g.emoji}</span> {g.label}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
 
                   {/* Station list */}
                   {radioLoading && (
                     <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
                       <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                      Loading stations…
+                      Loading US stations…
                     </div>
                   )}
 
                   {!radioLoading && radioStations.length > 0 && (
-                    <div className="space-y-1 max-h-56 overflow-y-auto -mx-1 px-1">
+                    <div className="space-y-0.5 max-h-60 overflow-y-auto -mx-1 px-1">
                       {radioStations.map((station) => (
                         <button
                           key={station.stationuuid}
@@ -1490,18 +1577,18 @@ export default function MusicSync() {
                             <img
                               src={station.favicon}
                               alt=""
-                              className="w-8 h-8 rounded-lg object-cover flex-shrink-0 bg-secondary"
+                              className="w-9 h-9 rounded-lg object-cover flex-shrink-0 bg-secondary"
                               onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                             />
                           ) : (
-                            <div className="w-8 h-8 rounded-lg bg-secondary flex items-center justify-center flex-shrink-0">
+                            <div className="w-9 h-9 rounded-lg bg-secondary flex items-center justify-center flex-shrink-0">
                               <Radio className="w-4 h-4 text-muted-foreground" />
                             </div>
                           )}
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-medium truncate">{station.name}</p>
                             <p className="text-xs text-muted-foreground truncate">
-                              {station.country}{station.bitrate > 0 ? ` · ${station.bitrate}kbps` : ""}
+                              {station.state ? `${station.state} · ` : ""}{station.bitrate > 0 ? `${station.bitrate}kbps` : ""}
                             </p>
                           </div>
                           <Play className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
@@ -1510,9 +1597,9 @@ export default function MusicSync() {
                     </div>
                   )}
 
-                  {!radioLoading && !selectedGenre && (
-                    <p className="text-center text-xs text-muted-foreground py-4">
-                      Select a genre above to browse stations
+                  {!radioLoading && !selectedGenre && !radioSearchActive && (
+                    <p className="text-center text-xs text-muted-foreground py-3">
+                      Tap ⭐ Top Stations or pick a genre
                     </p>
                   )}
                 </>
