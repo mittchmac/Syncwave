@@ -191,12 +191,16 @@ export default function MusicSync() {
     const buffer = audioBufferRef.current;
     if (!ctx || !buffer) return;
     try { sourceNodeRef.current?.stop(); } catch { /* already stopped */ }
-    const offset = offsetSeconds ?? playbackOffsetRef.current;
+    const baseOffset = offsetSeconds ?? playbackOffsetRef.current;
+    const delaySeconds = (startAtMs - Date.now()) / 1000;
+    // If startAt is in the past, advance the audio offset to compensate so we
+    // stay in sync with the host instead of starting from the wrong position.
+    const lateSeconds = Math.max(0, -delaySeconds);
+    const offset = Math.min(baseOffset + lateSeconds, buffer.duration - 0.01);
     playbackOffsetRef.current = offset;
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(ctx.destination);
-    const delaySeconds = (startAtMs - Date.now()) / 1000;
     const startCtxTime = ctx.currentTime + Math.max(delaySeconds, 0);
     source.start(startCtxTime, offset);
     sourceNodeRef.current = source;
@@ -522,7 +526,7 @@ export default function MusicSync() {
         // Seek listener to current position, then play if currently playing
         ws2.send(JSON.stringify({ type: "seek", position: pos }));
         if (isPlayingRef.current) {
-          ws2.send(JSON.stringify({ type: "play", startAt: Date.now() + 400 }));
+          ws2.send(JSON.stringify({ type: "play", startAt: Date.now() + 800 }));
         }
 
       } else if (msg.type === "error") {
@@ -791,7 +795,7 @@ export default function MusicSync() {
 
   const handleMp3Play = () => {
     if (!audioBufferRef.current) return;
-    const startAt = Date.now() + 300;
+    const startAt = Date.now() + 800;
     send({ type: "play", startAt });
   };
 
@@ -915,7 +919,7 @@ export default function MusicSync() {
       if (roomMode === "mp3") {
         // Re-broadcast current position to listener
         send({ type: "seek", position: audioTime });
-        if (isPlaying) send({ type: "play", startAt: Date.now() + 400 });
+        if (isPlaying) send({ type: "play", startAt: Date.now() + 800 });
       } else if (roomMode === "spotify") {
         // Immediate re-poll (fires the Spotify polling loop once right now)
         pollAndSync();

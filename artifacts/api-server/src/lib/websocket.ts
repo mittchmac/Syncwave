@@ -218,7 +218,11 @@ export function setupWebSocket(server: Server) {
         }
         const room = getRoom(myRoomCode);
         if (!room) return;
-        const startAt = msg.startAt ?? Date.now() + 500;
+        // Ensure both devices always have at least 500 ms of lead time from
+        // the moment this message leaves the server, even if transit from the
+        // host consumed part of the original lead.
+        const MIN_LEAD_MS = 500;
+        const startAt = Math.max(msg.startAt ?? Date.now() + MIN_LEAD_MS, Date.now() + MIN_LEAD_MS);
         if (room.client) send(room.client, { type: "play", startAt });
         send(ws, { type: "play", startAt });
         return;
