@@ -836,10 +836,8 @@ export default function MusicSync() {
     };
 
     audio.play().catch((err) => {
-      // Autoplay policy rejection — show a helpful message
-      if (err?.name === "NotAllowedError") {
-        setRadioError("Tap the screen once to allow audio, then select the station again.");
-      } else if (!audio.currentTime || audio.currentTime === 0) {
+      // Autoplay policy rejection — don't show an error; the "Tap to Listen" button handles this
+      if (err?.name !== "NotAllowedError" && (!audio.currentTime || audio.currentTime === 0)) {
         setRadioError("Could not connect to this station. Try another.");
       }
       setRadioPlaying(false);
@@ -886,6 +884,7 @@ export default function MusicSync() {
   };
 
   const handleEnableAudio = () => {
+    // Unlock Web Audio API (required for MP3 sync via AudioBufferSourceNode)
     const ctx = new AudioContext();
     audioCtxRef.current = ctx;
     const buf = ctx.createBuffer(1, 1, 22050);
@@ -893,6 +892,16 @@ export default function MusicSync() {
     src.buffer = buf;
     src.connect(ctx.destination);
     src.start(0);
+
+    // Also pre-unlock HTMLAudioElement autoplay (required for radio on iOS Safari).
+    // iOS tracks autoplay permission per element type — AudioContext alone isn't enough.
+    // We play+pause a silent inline WAV right inside this user-gesture handler.
+    const silentEl = new Audio(
+      "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAIA"
+    );
+    silentEl.volume = 0;
+    silentEl.play().then(() => silentEl.pause()).catch(() => {});
+
     ctx.resume().then(() => setAudioEnabled(true));
   };
 
@@ -1512,19 +1521,41 @@ export default function MusicSync() {
                             LIVE
                           </span>
                         ) : (
-                          <span className="text-xs text-muted-foreground mt-0.5 block">Connecting…</span>
+                          <span className="text-xs text-muted-foreground mt-0.5 block">
+                            {radioError ? "Unavailable" : "Connecting…"}
+                          </span>
                         )}
                       </div>
                     </div>
+
+                    {/* Tap to listen — shown when autoplay was blocked by the browser */}
+                    {!radioPlaying && !radioError && (
+                      <button
+                        onClick={() => {
+                          setRadioError(null);
+                          radioAudioRef.current?.play()
+                            .then(() => setRadioPlaying(true))
+                            .catch(() => setRadioError("Could not play this station. The host may need to pick a different one."));
+                        }}
+                        className="w-full flex items-center justify-center gap-2 py-4 rounded-xl bg-primary text-primary-foreground font-bold text-base hover:opacity-90 active:scale-[0.97] transition-all shadow-lg"
+                      >
+                        <Volume2 className="w-5 h-5" />
+                        Tap to Start Listening
+                      </button>
+                    )}
+
                     {radioError && (
                       <div className="flex items-start gap-2 bg-destructive/10 border border-destructive/30 rounded-xl px-3 py-2.5">
                         <span className="text-destructive text-xs flex-1">{radioError}</span>
                         <button onClick={() => setRadioError(null)}><X className="w-3.5 h-3.5 text-destructive mt-0.5" /></button>
                       </div>
                     )}
-                    <div className={`text-center text-xs font-medium ${radioPlaying ? "text-green-400" : "text-muted-foreground"}`}>
-                      {radioPlaying ? "▶ Playing in sync" : "Buffering…"}
-                    </div>
+
+                    {radioPlaying && (
+                      <div className="text-center text-xs font-medium text-green-400">
+                        ▶ Playing in sync
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="text-center py-6">
