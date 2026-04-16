@@ -9,6 +9,7 @@ export interface RadioStation {
   favicon: string;
   tags: string;
   country: string;
+  countrycode: string;
   votes: number;
   bitrate: number;
 }
@@ -30,19 +31,38 @@ export const FEATURED_GENRES: { label: string; tag: string; emoji: string }[] = 
   { label: "News", tag: "news", emoji: "📻" },
 ];
 
+function baseParams(extra: string) {
+  return `?order=votes&reverse=true&limit=80&hidebroken=true&bitrateMin=128&is_https=true${extra}`;
+}
+
+function isValid(s: RadioStation) {
+  return s.url_resolved?.startsWith("https://") && s.name?.trim() && s.bitrate >= 96;
+}
+
+async function query(tag: string, extra: string): Promise<RadioStation[]> {
+  const url = `${API}/stations/bytag/${encodeURIComponent(tag)}${baseParams(extra)}`;
+  const res = await fetch(url, { headers: { "User-Agent": "SyncWave/1.0" } });
+  if (!res.ok) return [];
+  return (await res.json()) as RadioStation[];
+}
+
 export async function fetchStationsByTag(tag: string): Promise<RadioStation[]> {
   try {
-    const url =
-      `${API}/stations/bytag/${encodeURIComponent(tag)}` +
-      `?order=votes&reverse=true&limit=60&hidebroken=true`;
-    const res = await fetch(url, {
-      headers: { "User-Agent": "SyncWave/1.0" },
-    });
-    if (!res.ok) return [];
-    const all = (await res.json()) as RadioStation[];
-    return all
-      .filter((s) => s.url_resolved?.startsWith("https://") && s.name?.trim())
-      .slice(0, 25);
+    // First pass: US stations with ≥128 kbps — high quality, reputable
+    const us = await query(tag, "&countrycode=US");
+    const usFiltered = us.filter(isValid).slice(0, 20);
+
+    if (usFiltered.length >= 6) return usFiltered;
+
+    // Second pass: English-language stations globally (US, UK, CA, AU, NZ, etc.)
+    const en = await query(tag, "&language=english");
+    const enFiltered = en.filter(isValid).slice(0, 20);
+
+    if (enFiltered.length >= 4) return enFiltered;
+
+    // Final fallback: global high-bitrate stations (already filtered HTTPS + hidebroken)
+    const global = await query(tag, "");
+    return global.filter(isValid).slice(0, 20);
   } catch {
     return [];
   }

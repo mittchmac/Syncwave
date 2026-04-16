@@ -818,18 +818,32 @@ export default function MusicSync() {
   const playRadioStream = (streamUrl: string, stationName: string, favicon: string) => {
     stopRadioAudio();
     const audio = new Audio(streamUrl);
-    audio.crossOrigin = "anonymous";
+    // Do NOT set crossOrigin — most radio streams lack CORS headers and it causes false errors
     radioAudioRef.current = audio;
     setRadioStation({ streamUrl, stationName, favicon });
-    setRadioPlaying(true);
-    audio.play().catch(() => {
-      setRadioError("Could not play this station — it may be offline or blocked by CORS. Try another.");
+    setRadioError(null);
+
+    // Confirm playing once the browser has buffered enough data
+    audio.addEventListener("canplay", () => setRadioPlaying(true), { once: true });
+    audio.addEventListener("playing", () => { setRadioPlaying(true); setRadioError(null); }, { once: true });
+
+    // Only surface an error if audio hasn't started playing at all
+    audio.onerror = () => {
+      if (!audio.currentTime || audio.currentTime === 0) {
+        setRadioError("Station may be offline or unavailable. Try another.");
+        setRadioPlaying(false);
+      }
+    };
+
+    audio.play().catch((err) => {
+      // Autoplay policy rejection — show a helpful message
+      if (err?.name === "NotAllowedError") {
+        setRadioError("Tap the screen once to allow audio, then select the station again.");
+      } else if (!audio.currentTime || audio.currentTime === 0) {
+        setRadioError("Could not connect to this station. Try another.");
+      }
       setRadioPlaying(false);
     });
-    audio.onerror = () => {
-      setRadioError("Stream error — station may be offline. Try another.");
-      setRadioPlaying(false);
-    };
   };
 
   const handleCreateRadioRoom = () => {
