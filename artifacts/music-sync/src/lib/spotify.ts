@@ -230,13 +230,17 @@ export interface SpotifyTrack {
 }
 
 export async function searchTracks(token: string, query: string): Promise<SpotifyTrack[]> {
-  const params = new URLSearchParams({ q: query, type: "track", limit: "8" });
-  const res = await fetch(`https://api.spotify.com/v1/search?${params}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) return [];
-  const data = await res.json();
-  return (data.tracks?.items ?? []) as SpotifyTrack[];
+  try {
+    const params = new URLSearchParams({ q: query, type: "track", limit: "8" });
+    const res = await fetch(`https://api.spotify.com/v1/search?${params}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.tracks?.items ?? []) as SpotifyTrack[];
+  } catch {
+    return [];
+  }
 }
 
 export async function playTrack(

@@ -253,19 +253,19 @@ export default function MusicSync() {
   const execSpotifyPlayByName = useCallback(async (songName: string, artistName: string, positionMs: number, startAt: number) => {
     const token = await getValidToken();
     const deviceId = spotifyDeviceIdRef.current;
-    if (!token || !deviceId || !spotifyActivatedRef.current) {
-      // Store as pending by name - we'll handle it after activation
-      return;
-    }
+    if (!token || !deviceId || !spotifyActivatedRef.current) return;
     try {
-      const tracks = await searchTracks(token, `${songName} ${artistName}`);
+      // Try "song artist" first, fall back to song name only
+      let tracks = await searchTracks(token, `${songName} ${artistName}`);
+      if (!tracks.length) tracks = await searchTracks(token, songName);
       if (!tracks.length) { setSpotifyError(`Could not find "${songName}" on Spotify.`); return; }
       const track = tracks[0];
       setNowPlaying({ id: track.uri, name: track.name, artist: track.artists[0]?.name ?? "", albumArt: track.album.images[0]?.url ?? "" });
       const elapsed = Math.max(0, Date.now() - startAt);
       await execSpotifyPlay(track.uri, positionMs + elapsed, Date.now());
-    } catch {
-      setSpotifyError("Cross-service search failed. Try Force Sync.");
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      setSpotifyError(`Spotify search failed: ${detail}`);
     }
   }, [execSpotifyPlay]);
 
@@ -318,16 +318,24 @@ export default function MusicSync() {
     const kit = appleKitRef.current;
     if (!kit || !kit.isAuthorized) return;
     try {
-      const res = await kit.api.search(`${songName} ${artistName}`, { types: "songs", limit: 5 });
-      const songs: AppleMusicItem[] = res.songs?.data ?? [];
+      // Try with artist first, fall back to song name only
+      let songs: AppleMusicItem[] = [];
+      try {
+        const res = await kit.api.search(`${songName} ${artistName}`, { types: ["songs"], limit: 5 });
+        songs = res.songs?.data ?? [];
+      } catch {
+        const res2 = await kit.api.search(songName, { types: ["songs"], limit: 5 });
+        songs = res2.songs?.data ?? [];
+      }
       if (!songs.length) { setAppleError(`Could not find "${songName}" on Apple Music.`); return; }
       const song = songs[0];
       const albumArt = getArtworkUrl(song, 300);
       setAppleNowPlaying({ id: song.id, name: song.attributes.name, artist: song.attributes.artistName, albumArt });
       const elapsed = Math.max(0, Date.now() - startAt);
       await execApplePlay(song.id, positionMs + elapsed, Date.now());
-    } catch {
-      setAppleError("Cross-service search failed. Try Force Sync.");
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      setAppleError(`Apple Music search failed: ${detail}`);
     }
   }, [execApplePlay]);
 
@@ -792,7 +800,7 @@ export default function MusicSync() {
       if (!kit) return;
       setApplePickerLoading(true);
       try {
-        const res = await kit.api.search(q, { types: "songs", limit: 8 });
+        const res = await kit.api.search(q, { types: ["songs"], limit: 8 });
         setApplePickerResults(res.songs?.data ?? []);
       } catch { setApplePickerResults([]); }
       finally { setApplePickerLoading(false); }

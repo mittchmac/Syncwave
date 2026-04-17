@@ -46,7 +46,7 @@ export interface MusicKitInstance {
 }
 
 export interface MusicKitAPI {
-  search(term: string, options?: { types?: string; limit?: number }): Promise<AppleSearchResult>;
+  search(term: string, options?: { types?: string | string[]; limit?: number; storefront?: string }): Promise<AppleSearchResult>;
   song(id: string): Promise<AppleMusicItem>;
 }
 
