@@ -11,24 +11,27 @@ import {
 const HOST_GRACE_MS = 600_000; // 10 minutes
 
 type WsMessage =
-  | { type: "create-room"; mode?: "spotify" | "radio" }
+  | { type: "create-room"; mode?: "spotify" | "radio" | "apple" }
   | { type: "join-room"; code: string }
   | { type: "rejoin-room"; code: string }
   | { type: "ping" }
   | { type: "request-sync" }
   | {
       type: "spotify-play";
-      trackUri: string;
-      trackName: string;
-      artistName: string;
-      albumArt: string;
-      positionMs: number;
-      startAt: number;
+      trackUri: string; trackName: string; artistName: string;
+      albumArt: string; positionMs: number; startAt: number;
     }
   | { type: "spotify-pause" }
   | { type: "spotify-seek"; positionMs: number }
   | { type: "radio-play"; streamUrl: string; stationName: string; favicon: string }
-  | { type: "radio-stop" };
+  | { type: "radio-stop" }
+  | {
+      type: "apple-play";
+      songId: string; songName: string; artistName: string;
+      albumArt: string; positionMs: number; startAt: number;
+    }
+  | { type: "apple-pause" }
+  | { type: "apple-seek"; positionMs: number };
 
 function send(ws: WebSocket, data: object) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -87,18 +90,9 @@ export function setupWebSocket(server: Server) {
 
       if (msg.type === "rejoin-room") {
         const room = getRoom(msg.code);
-        if (!room) {
-          send(ws, { type: "error", message: "Room expired" });
-          return;
-        }
-        if (room.hostConnected) {
-          send(ws, { type: "error", message: "Room already has a host" });
-          return;
-        }
-        if (room.deleteTimer) {
-          clearTimeout(room.deleteTimer);
-          room.deleteTimer = null;
-        }
+        if (!room) { send(ws, { type: "error", message: "Room expired" }); return; }
+        if (room.hostConnected) { send(ws, { type: "error", message: "Room already has a host" }); return; }
+        if (room.deleteTimer) { clearTimeout(room.deleteTimer); room.deleteTimer = null; }
         room.host = ws;
         room.hostConnected = true;
         myRoomCode = msg.code;
@@ -114,18 +108,11 @@ export function setupWebSocket(server: Server) {
 
       if (msg.type === "join-room") {
         const room = getRoom(msg.code);
-        if (!room) {
-          send(ws, { type: "error", message: "Room not found" });
-          return;
-        }
+        if (!room) { send(ws, { type: "error", message: "Room not found" }); return; }
         const existingDead =
           room.client &&
-          (room.client.readyState === WebSocket.CLOSED ||
-            room.client.readyState === WebSocket.CLOSING);
-        if (room.client && !existingDead) {
-          send(ws, { type: "error", message: "Room is full" });
-          return;
-        }
+          (room.client.readyState === WebSocket.CLOSED || room.client.readyState === WebSocket.CLOSING);
+        if (room.client && !existingDead) { send(ws, { type: "error", message: "Room is full" }); return; }
         room.client = ws;
         myRoomCode = msg.code;
         myRole = "client";
@@ -139,18 +126,21 @@ export function setupWebSocket(server: Server) {
         if (room.lastSpotifyPlay) {
           joinedPayload.lastSpotifyPlay = {
             ...room.lastSpotifyPlay,
+            positionMs: room.lastSpotifyPlay.positionMs + (Date.now() - room.lastSpotifyPlay.sentAt),
             sentAt: Date.now(),
-            positionMs: room.lastSpotifyPlay.positionMs +
-              (Date.now() - room.lastSpotifyPlay.sentAt),
           };
         }
-        if (room.lastRadioPlay) {
-          joinedPayload.lastRadioPlay = room.lastRadioPlay;
+        if (room.lastRadioPlay) joinedPayload.lastRadioPlay = room.lastRadioPlay;
+        if (room.lastApplePlay) {
+          joinedPayload.lastApplePlay = {
+            ...room.lastApplePlay,
+            positionMs: room.lastApplePlay.positionMs + (Date.now() - room.lastApplePlay.sentAt),
+            sentAt: Date.now(),
+          };
         }
+
         send(ws, joinedPayload);
-        if (room.host) {
-          send(room.host, { type: "client-joined" });
-        }
+        if (room.host) send(room.host, { type: "client-joined" });
         logger.info({ code: msg.code, mode: room.mode }, "Client joined room");
         return;
       }
@@ -171,8 +161,18 @@ export function setupWebSocket(server: Server) {
             startAt: Date.now() + 500,
           });
         }
-        if (room.lastRadioPlay) {
-          send(ws, { type: "radio-play", ...room.lastRadioPlay });
+        if (room.lastRadioPlay) send(ws, { type: "radio-play", ...room.lastRadioPlay });
+        if (room.lastApplePlay) {
+          const elapsed = Date.now() - room.lastApplePlay.sentAt;
+          send(ws, {
+            type: "apple-sync",
+            songId: room.lastApplePlay.songId,
+            songName: room.lastApplePlay.songName,
+            artistName: room.lastApplePlay.artistName,
+            albumArt: room.lastApplePlay.albumArt,
+            positionMs: room.lastApplePlay.positionMs + elapsed,
+            startAt: Date.now() + 500,
+          });
         }
         return;
       }
@@ -180,31 +180,11 @@ export function setupWebSocket(server: Server) {
       // ── Spotify controls ───────────────────────────────────────────────────
 
       if (msg.type === "spotify-play") {
-        if (!myRoomCode || myRole !== "host") {
-          send(ws, { type: "error", message: "Only host can send spotify-play" });
-          return;
-        }
+        if (!myRoomCode || myRole !== "host") { send(ws, { type: "error", message: "Only host can send spotify-play" }); return; }
         const room = getRoom(myRoomCode);
         if (!room) return;
-
-        room.lastSpotifyPlay = {
-          trackUri: msg.trackUri,
-          trackName: msg.trackName,
-          artistName: msg.artistName,
-          albumArt: msg.albumArt,
-          positionMs: msg.positionMs,
-          sentAt: Date.now(),
-        };
-
-        if (room.client) send(room.client, {
-          type: "spotify-play",
-          trackUri: msg.trackUri,
-          trackName: msg.trackName,
-          artistName: msg.artistName,
-          albumArt: msg.albumArt,
-          positionMs: msg.positionMs,
-          startAt: msg.startAt,
-        });
+        room.lastSpotifyPlay = { trackUri: msg.trackUri, trackName: msg.trackName, artistName: msg.artistName, albumArt: msg.albumArt, positionMs: msg.positionMs, sentAt: Date.now() };
+        if (room.client) send(room.client, { type: "spotify-play", trackUri: msg.trackUri, trackName: msg.trackName, artistName: msg.artistName, albumArt: msg.albumArt, positionMs: msg.positionMs, startAt: msg.startAt });
         logger.info({ trackUri: msg.trackUri }, "Spotify play broadcast");
         return;
       }
@@ -246,6 +226,35 @@ export function setupWebSocket(server: Server) {
         if (room.client) send(room.client, { type: "radio-stop" });
         return;
       }
+
+      // ── Apple Music controls ───────────────────────────────────────────────
+
+      if (msg.type === "apple-play") {
+        if (!myRoomCode || myRole !== "host") { send(ws, { type: "error", message: "Only host can send apple-play" }); return; }
+        const room = getRoom(myRoomCode);
+        if (!room) return;
+        room.lastApplePlay = { songId: msg.songId, songName: msg.songName, artistName: msg.artistName, albumArt: msg.albumArt, positionMs: msg.positionMs, sentAt: Date.now() };
+        if (room.client) send(room.client, { type: "apple-play", songId: msg.songId, songName: msg.songName, artistName: msg.artistName, albumArt: msg.albumArt, positionMs: msg.positionMs, startAt: msg.startAt });
+        logger.info({ songId: msg.songId }, "Apple Music play broadcast");
+        return;
+      }
+
+      if (msg.type === "apple-pause") {
+        if (!myRoomCode || myRole !== "host") return;
+        const room = getRoom(myRoomCode);
+        if (!room) return;
+        room.lastApplePlay = null;
+        if (room.client) send(room.client, { type: "apple-pause" });
+        return;
+      }
+
+      if (msg.type === "apple-seek") {
+        if (!myRoomCode || myRole !== "host") return;
+        const room = getRoom(myRoomCode);
+        if (!room) return;
+        if (room.client) send(room.client, { type: "apple-seek", positionMs: msg.positionMs });
+        return;
+      }
     });
 
     ws.on("close", () => {
@@ -257,7 +266,6 @@ export function setupWebSocket(server: Server) {
         room.hostConnected = false;
         room.host = null;
         logger.info({ code: myRoomCode }, "Host disconnected — grace period started");
-
         const code = myRoomCode;
         room.deleteTimer = setTimeout(() => {
           const r = getRoom(code);
@@ -267,12 +275,9 @@ export function setupWebSocket(server: Server) {
             logger.info({ code }, "Host did not reconnect — room deleted");
           }
         }, HOST_GRACE_MS);
-
       } else if (myRole === "client") {
         room.client = null;
-        if (room.host) {
-          send(room.host, { type: "client-disconnected" });
-        }
+        if (room.host) send(room.host, { type: "client-disconnected" });
         logger.info({ code: myRoomCode }, "Client disconnected from room");
       }
     });
