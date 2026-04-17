@@ -318,14 +318,14 @@ export default function MusicSync() {
     const kit = appleKitRef.current;
     if (!kit || !kit.isAuthorized) return;
     try {
-      // Try with artist first, fall back to song name only
+      const storefront = kit.storefrontId || "us";
+      // Try "song + artist" first, fall back to song name only
       let songs: AppleMusicItem[] = [];
-      try {
-        const res = await kit.api.search(`${songName} ${artistName}`, { types: ["songs"], limit: 5 });
-        songs = res.songs?.data ?? [];
-      } catch {
-        const res2 = await kit.api.search(songName, { types: ["songs"], limit: 5 });
-        songs = res2.songs?.data ?? [];
+      const r1 = await kit.api.music(`/v1/catalog/${storefront}/search`, { term: `${songName} ${artistName}`, types: "songs", limit: 5 });
+      songs = r1.data.results?.songs?.data ?? [];
+      if (!songs.length) {
+        const r2 = await kit.api.music(`/v1/catalog/${storefront}/search`, { term: songName, types: "songs", limit: 5 });
+        songs = r2.data.results?.songs?.data ?? [];
       }
       if (!songs.length) { setAppleError(`Could not find "${songName}" on Apple Music.`); return; }
       const song = songs[0];
@@ -800,8 +800,9 @@ export default function MusicSync() {
       if (!kit) return;
       setApplePickerLoading(true);
       try {
-        const res = await kit.api.search(q, { types: ["songs"], limit: 8 });
-        setApplePickerResults(res.songs?.data ?? []);
+        const storefront = kit.storefrontId || "us";
+        const res = await kit.api.music(`/v1/catalog/${storefront}/search`, { term: q, types: "songs", limit: 8 });
+        setApplePickerResults(res.data.results?.songs?.data ?? []);
       } catch { setApplePickerResults([]); }
       finally { setApplePickerLoading(false); }
     }, 500);

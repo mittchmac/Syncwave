@@ -35,6 +35,7 @@ export interface MusicKitInstance {
   readonly playbackState: number;
   readonly currentPlaybackTime: number;
   readonly currentPlaybackDuration: number;
+  readonly storefrontId: string;
   play(): Promise<void>;
   pause(): Promise<void>;
   seekToTime(time: number): Promise<void>;
@@ -45,9 +46,12 @@ export interface MusicKitInstance {
   api: MusicKitAPI;
 }
 
+/** MusicKit v3: api.music() makes authenticated catalog requests */
 export interface MusicKitAPI {
-  search(term: string, options?: { types?: string | string[]; limit?: number; storefront?: string }): Promise<AppleSearchResult>;
-  song(id: string): Promise<AppleMusicItem>;
+  music(
+    path: string,
+    params?: Record<string, unknown>
+  ): Promise<{ data: AppleCatalogResponse }>;
 }
 
 export interface AppleMusicItem {
@@ -61,8 +65,13 @@ export interface AppleMusicItem {
   };
 }
 
-export interface AppleSearchResult {
-  songs?: { data: AppleMusicItem[] };
+/** Response shape from /v1/catalog/{storefront}/search */
+export interface AppleCatalogResponse {
+  results?: {
+    songs?: { data: AppleMusicItem[] };
+  };
+  // direct data array (for single-resource endpoints like /songs/{id})
+  data?: AppleMusicItem[];
 }
 
 let _devToken: string | null = null;
