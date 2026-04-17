@@ -307,6 +307,24 @@ export default function MusicSync() {
     try { await kit.seekToTime(positionMs / 1000); } catch { /* ignore */ }
   }, []);
 
+  // Cross-service: listener uses Apple Music, receives spotify-play → search Apple Music for matching track
+  const execApplePlayByName = useCallback(async (songName: string, artistName: string, positionMs: number, startAt: number) => {
+    const kit = appleKitRef.current;
+    if (!kit || !kit.isAuthorized) return;
+    try {
+      const res = await kit.api.search(`${songName} ${artistName}`, { types: "songs", limit: 5 });
+      const songs: AppleMusicItem[] = res.songs?.data ?? [];
+      if (!songs.length) { setAppleError(`Could not find "${songName}" on Apple Music.`); return; }
+      const song = songs[0];
+      const albumArt = getArtworkUrl(song, 300);
+      setAppleNowPlaying({ id: song.id, name: song.attributes.name, artist: song.attributes.artistName, albumArt });
+      const elapsed = Math.max(0, Date.now() - startAt);
+      await execApplePlay(song.id, positionMs + elapsed, Date.now());
+    } catch {
+      setAppleError("Cross-service search failed. Try Force Sync.");
+    }
+  }, [execApplePlay]);
+
   // ── Spotify HOST polling ──────────────────────────────────────────────────
 
   const pollAndSync = useCallback(async () => {
@@ -494,9 +512,9 @@ export default function MusicSync() {
           setSpotifyPlaying(true);
           execSpotifyPlay(msg.trackUri, msg.positionMs, msg.startAt);
         } else if (svc === "apple") {
-          // Cross-service: Spotify room, Apple listener — not supported (Spotify has no Apple track IDs)
-          // Just show the now playing info
+          // Cross-service: Spotify room, Apple listener → search Apple Music for matching track
           setAppleNowPlaying({ id: "", name: msg.trackName, artist: msg.artistName, albumArt: msg.albumArt });
+          execApplePlayByName(msg.trackName, msg.artistName, msg.positionMs, msg.startAt);
         }
 
       } else if (msg.type === "spotify-pause") {
@@ -530,7 +548,7 @@ export default function MusicSync() {
 
     ws.onclose = () => { if (wsHeartbeatRef.current) { clearInterval(wsHeartbeatRef.current); wsHeartbeatRef.current = null; } setConnStatus("disconnected"); };
     ws.onerror = () => setConnStatus("disconnected");
-  }, [execSpotifyPlay, execSpotifyPause, execSpotifySeek, execSpotifyPlayByName, execApplePlay, execApplePause, execAppleSeek, playRadioStream, stopRadioAudio, showError]);
+  }, [execSpotifyPlay, execSpotifyPause, execSpotifySeek, execSpotifyPlayByName, execApplePlay, execApplePause, execAppleSeek, execApplePlayByName, playRadioStream, stopRadioAudio, showError]);
 
   // ── Effects ───────────────────────────────────────────────────────────────
 
