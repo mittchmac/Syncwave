@@ -580,10 +580,11 @@ export default function MusicSync() {
     };
   }, [spotifyToken, audioEnabled, shouldInitSdk, execSpotifyPlay]);
 
-  // ── Apple MusicKit init ────────────────────────────────────────────────────
+  // ── Apple MusicKit init ─────────────────────────────────────────────────────
+  // Load eagerly as soon as audio is enabled — mode/phase don't matter.
+  // loadMusicKit() caches the instance so multiple calls are safe.
   useEffect(() => {
     if (!audioEnabled) return;
-    if (roomMode !== "apple" && phase !== "idle") return;
     let mounted = true;
     loadMusicKit().then((kit) => {
       if (!mounted || !kit) return;
@@ -599,10 +600,11 @@ export default function MusicSync() {
       if (pending) { pendingApplePlayRef.current = null; execApplePlay(pending.songId, pending.positionMs, pending.startAt); }
     }).catch((err) => {
       if (!mounted) return;
-      setAppleError(err instanceof Error ? err.message : "Failed to load Apple Music");
+      // Don't surface Apple Music load errors unless actually in Apple mode
+      console.warn("MusicKit load:", err instanceof Error ? err.message : err);
     });
     return () => { mounted = false; };
-  }, [audioEnabled, roomMode, phase, execApplePlay]);
+  }, [audioEnabled, execApplePlay]);
 
   useEffect(() => {
     if (phase !== "hosting" && syncIntervalRef.current) { clearInterval(syncIntervalRef.current); syncIntervalRef.current = null; isSyncingRef.current = false; setIsSyncing(false); }
