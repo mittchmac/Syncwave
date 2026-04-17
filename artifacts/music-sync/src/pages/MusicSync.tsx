@@ -280,10 +280,16 @@ export default function MusicSync() {
     const targetSeconds = (positionMs + elapsed) / 1000;
     const doPlay = async () => {
       try {
-        await kit.setQueue({ song: songId, startPosition: 0 });
-        await kit.seekToTime(targetSeconds);
+        // Must play first — seeking before buffering starts fails silently
+        await kit.setQueue({ song: songId });
         await kit.play();
         setApplePlaying(true);
+        // Seek after a short buffer delay so the track is loaded
+        if (targetSeconds > 0.5) {
+          setTimeout(async () => {
+            try { await kit.seekToTime(targetSeconds); } catch { /* ignore */ }
+          }, 1200);
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Apple Music playback failed.";
         setAppleError(msg);
@@ -758,6 +764,18 @@ export default function MusicSync() {
   const handleActivateApple = async () => {
     const kit = appleKitRef.current;
     if (!kit) return;
+    // Unlock the browser's audio context while we're still inside the user gesture
+    try {
+      const ctx = new AudioContext();
+      await ctx.resume();
+      const buf = ctx.createBuffer(1, 1, 22050);
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      src.start(0);
+      await new Promise<void>((r) => setTimeout(r, 50));
+      ctx.close();
+    } catch { /* ignore */ }
     setListenerActivated(true);
     const pending = pendingApplePlayRef.current;
     if (pending) { pendingApplePlayRef.current = null; await execApplePlay(pending.songId, pending.positionMs, pending.startAt); }
