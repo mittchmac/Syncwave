@@ -6,24 +6,16 @@ import {
   createRoom,
   getRoom,
   deleteRoom,
-  getRooms,
 } from "./rooms";
 
-// Grace period before the room is actually deleted after the host drops.
-// The host spends most of their time in the Spotify app, not in SyncWave.
-// iOS / Android will freeze the browser tab aggressively — 10 minutes gives
-// plenty of room to switch back, even after locking the phone for a song or two.
 const HOST_GRACE_MS = 600_000; // 10 minutes
 
 type WsMessage =
-  | { type: "create-room"; mode?: "mp3" | "spotify" }
+  | { type: "create-room"; mode?: "spotify" | "radio" }
   | { type: "join-room"; code: string }
   | { type: "rejoin-room"; code: string }
   | { type: "ping" }
   | { type: "request-sync" }
-  | { type: "play"; startAt: number }
-  | { type: "pause" }
-  | { type: "seek"; position: number }
   | {
       type: "spotify-play";
       trackUri: string;
@@ -36,8 +28,7 @@ type WsMessage =
   | { type: "spotify-pause" }
   | { type: "spotify-seek"; positionMs: number }
   | { type: "radio-play"; streamUrl: string; stationName: string; favicon: string }
-  | { type: "radio-stop" }
-  | { type: "request-resync" };
+  | { type: "radio-stop" };
 
 function send(ws: WebSocket, data: object) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -48,8 +39,6 @@ function send(ws: WebSocket, data: object) {
 export function setupWebSocket(server: Server) {
   const wss = new WebSocketServer({ server, path: "/ws" });
 
-  // Server-side heartbeat — pings every 20s to keep the connection alive
-  // through Replit's proxy idle timeout
   const heartbeat = setInterval(() => {
     wss.clients.forEach((client) => {
       const c = client as WebSocket & { isAlive?: boolean };
@@ -79,7 +68,6 @@ export function setupWebSocket(server: Server) {
         return;
       }
 
-      // Client-side keepalive — just reset isAlive and respond
       if (msg.type === "ping") {
         liveWs.isAlive = true;
         send(ws, { type: "pong" });
@@ -88,7 +76,7 @@ export function setupWebSocket(server: Server) {
 
       if (msg.type === "create-room") {
         const code = generateRoomCode();
-        const mode = msg.mode ?? "mp3";
+        const mode = msg.mode ?? "spotify";
         createRoom(code, ws, mode);
         myRoomCode = code;
         myRole = "host";
@@ -97,7 +85,6 @@ export function setupWebSocket(server: Server) {
         return;
       }
 
-      // Host rejoins after a transient disconnect (within the grace window)
       if (msg.type === "rejoin-room") {
         const room = getRoom(msg.code);
         if (!room) {
@@ -108,7 +95,6 @@ export function setupWebSocket(server: Server) {
           send(ws, { type: "error", message: "Room already has a host" });
           return;
         }
-        // Cancel the deletion timer
         if (room.deleteTimer) {
           clearTimeout(room.deleteTimer);
           room.deleteTimer = null;
@@ -132,8 +118,6 @@ export function setupWebSocket(server: Server) {
           send(ws, { type: "error", message: "Room not found" });
           return;
         }
-        // Allow rejoin if the existing client socket is already dead (stale reference
-        // from a previous connection that closed before the server processed the new one)
         const existingDead =
           room.client &&
           (room.client.readyState === WebSocket.CLOSED ||
@@ -146,14 +130,10 @@ export function setupWebSocket(server: Server) {
         myRoomCode = msg.code;
         myRole = "client";
 
-        // If the host is already syncing, send the current track state so the
-        // listener doesn't have to wait for the next poll to start playing
         const joinedPayload: Record<string, unknown> = {
           type: "joined-room",
           code: msg.code,
           mode: room.mode,
-          hasAudio: !!room.audioData,
-          audioName: room.audioName,
           hostConnected: room.hostConnected,
         };
         if (room.lastSpotifyPlay) {
@@ -175,12 +155,10 @@ export function setupWebSocket(server: Server) {
         return;
       }
 
-      // Listener requests the current track state (sent when tab regains focus)
       if (msg.type === "request-sync") {
         if (!myRoomCode || myRole !== "client") return;
         const room = getRoom(myRoomCode);
         if (!room) return;
-        // Spotify: reply directly from cached state
         if (room.lastSpotifyPlay) {
           const elapsed = Date.now() - room.lastSpotifyPlay.sentAt;
           send(ws, {
@@ -193,58 +171,9 @@ export function setupWebSocket(server: Server) {
             startAt: Date.now() + 500,
           });
         }
-        // Radio: reply with last station
         if (room.lastRadioPlay) {
           send(ws, { type: "radio-play", ...room.lastRadioPlay });
         }
-        return;
-      }
-
-      // Listener asks host to re-broadcast its current MP3 position (force-sync)
-      if (msg.type === "request-resync") {
-        if (!myRoomCode || myRole !== "client") return;
-        const room = getRoom(myRoomCode);
-        if (!room || !room.host) return;
-        send(room.host, { type: "resync-requested" });
-        return;
-      }
-
-      // ── MP3 playback controls ──────────────────────────────────────────────
-
-      if (msg.type === "play") {
-        if (!myRoomCode || myRole !== "host") {
-          send(ws, { type: "error", message: "Only host can send play" });
-          return;
-        }
-        const room = getRoom(myRoomCode);
-        if (!room) return;
-        // Ensure both devices always have at least 500 ms of lead time from
-        // the moment this message leaves the server, even if transit from the
-        // host consumed part of the original lead.
-        const MIN_LEAD_MS = 500;
-        const startAt = Math.max(msg.startAt ?? Date.now() + MIN_LEAD_MS, Date.now() + MIN_LEAD_MS);
-        if (room.client) send(room.client, { type: "play", startAt });
-        send(ws, { type: "play", startAt });
-        return;
-      }
-
-      if (msg.type === "pause") {
-        if (!myRoomCode || myRole !== "host") {
-          send(ws, { type: "error", message: "Only host can send pause" });
-          return;
-        }
-        const room = getRoom(myRoomCode);
-        if (!room) return;
-        if (room.client) send(room.client, { type: "pause" });
-        send(ws, { type: "pause" });
-        return;
-      }
-
-      if (msg.type === "seek") {
-        if (!myRoomCode || myRole !== "host") return;
-        const room = getRoom(myRoomCode);
-        if (!room) return;
-        if (room.client) send(room.client, { type: "seek", position: msg.position });
         return;
       }
 
@@ -258,7 +187,6 @@ export function setupWebSocket(server: Server) {
         const room = getRoom(myRoomCode);
         if (!room) return;
 
-        // Snapshot the state so late/backgrounded listeners can re-sync
         room.lastSpotifyPlay = {
           trackUri: msg.trackUri,
           trackName: msg.trackName,
@@ -268,7 +196,7 @@ export function setupWebSocket(server: Server) {
           sentAt: Date.now(),
         };
 
-        const payload = {
+        if (room.client) send(room.client, {
           type: "spotify-play",
           trackUri: msg.trackUri,
           trackName: msg.trackName,
@@ -276,9 +204,7 @@ export function setupWebSocket(server: Server) {
           albumArt: msg.albumArt,
           positionMs: msg.positionMs,
           startAt: msg.startAt,
-        };
-        // Only forward to listener — host manages its own playback directly
-        if (room.client) send(room.client, payload);
+        });
         logger.info({ trackUri: msg.trackUri }, "Spotify play broadcast");
         return;
       }
@@ -287,7 +213,7 @@ export function setupWebSocket(server: Server) {
         if (!myRoomCode || myRole !== "host") return;
         const room = getRoom(myRoomCode);
         if (!room) return;
-        room.lastSpotifyPlay = null; // clear — host has paused
+        room.lastSpotifyPlay = null;
         if (room.client) send(room.client, { type: "spotify-pause" });
         return;
       }
@@ -300,13 +226,14 @@ export function setupWebSocket(server: Server) {
         return;
       }
 
+      // ── Radio controls ─────────────────────────────────────────────────────
+
       if (msg.type === "radio-play") {
         if (!myRoomCode || myRole !== "host") return;
         const room = getRoom(myRoomCode);
         if (!room) return;
         room.lastRadioPlay = { streamUrl: msg.streamUrl, stationName: msg.stationName, favicon: msg.favicon };
-        const payload = { type: "radio-play", streamUrl: msg.streamUrl, stationName: msg.stationName, favicon: msg.favicon };
-        if (room.client) send(room.client, payload);
+        if (room.client) send(room.client, { type: "radio-play", streamUrl: msg.streamUrl, stationName: msg.stationName, favicon: msg.favicon });
         logger.info({ stationName: msg.stationName }, "Radio play broadcast");
         return;
       }
@@ -331,7 +258,6 @@ export function setupWebSocket(server: Server) {
         room.host = null;
         logger.info({ code: myRoomCode }, "Host disconnected — grace period started");
 
-        // Give the host 45s to reconnect before notifying the listener and deleting the room
         const code = myRoomCode;
         room.deleteTimer = setTimeout(() => {
           const r = getRoom(code);

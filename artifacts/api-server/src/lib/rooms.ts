@@ -1,6 +1,6 @@
 import type { WebSocket } from "ws";
 
-export type RoomMode = "mp3" | "spotify" | "radio";
+export type RoomMode = "spotify" | "radio";
 
 export interface LastSpotifyPlay {
   trackUri: string;
@@ -16,8 +16,6 @@ export interface Room {
   code: string;
   host: WebSocket | null;
   client: WebSocket | null;
-  audioData: Buffer | null;
-  audioName: string | null;
   mode: RoomMode;
   hostConnected: boolean;
   deleteTimer: ReturnType<typeof setTimeout> | null;
@@ -37,9 +35,9 @@ export function generateRoomCode(): string {
   return code;
 }
 
-export function createRoom(code: string, host: WebSocket, mode: RoomMode = "mp3"): Room {
+export function createRoom(code: string, host: WebSocket, mode: RoomMode = "spotify"): Room {
   const room: Room = {
-    code, host, client: null, audioData: null, audioName: null, mode,
+    code, host, client: null, mode,
     hostConnected: true, deleteTimer: null, lastSpotifyPlay: null, lastRadioPlay: null,
   };
   rooms.set(code, room);

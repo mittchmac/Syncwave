@@ -28,12 +28,7 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 ## Artifacts
 
 ### music-sync (React + Vite, preview at `/`)
-Synchronized music playback app "SyncWave". Supports two modes:
-
-**MP3 mode:** Host uploads an MP3, both devices play via Web Audio API (AudioBufferSourceNode).
-- Uses timestamp-based scheduling for near-perfect sync (~0ms)
-- Critical: Web Audio API only, NOT HTMLAudioElement (blocked by iOS Safari from WS callbacks)
-- AudioContext must be unlocked via user gesture ("Tap to Enable Audio" screen)
+Synchronized music playback app "SyncWave". Supports two active modes (Apple Music coming soon):
 
 **Radio mode:** Host picks a live US radio station from Radio Browser API (no login needed). Both host and listener play the same stream URL simultaneously.
 - `artifacts/music-sync/src/lib/radioBrowser.ts` — `fetchStationsByTag()`, `fetchTopUSStations()`, `searchStationsByName()`, `FEATURED_GENRES` (16 US genres), HTTPS-only, deduplication
