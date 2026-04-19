@@ -211,19 +211,24 @@ export default function MusicSync() {
     const isSameTrack = listenerCurrentTrackRef.current === uri;
     const player = spotifyPlayerRef.current;
     if (isSameTrack && player) {
-      const waitMs = Math.max(0, delay);
+      // Same track — just seek to the right spot at startAt
       setTimeout(async () => {
-        const driftMs = Date.now() - startAt;
-        const target = positionMs + Math.max(0, driftMs);
-        try { await player.seek(target); setSpotifyPlaying(true); } catch { /* ignore */ }
-      }, waitMs);
+        const target = positionMs + Math.max(0, Date.now() - startAt);
+        try { await player.seek(Math.max(0, target)); setSpotifyPlaying(true); } catch { /* ignore */ }
+      }, Math.max(0, delay));
       return;
     }
-    const doPlay = async (adjustedPositionMs: number) => {
+    const doPlay = async () => {
       try {
         const token = await getValidToken();
         if (!token || !spotifyDeviceIdRef.current) return;
-        await playTrack(token, spotifyDeviceIdRef.current, uri, adjustedPositionMs);
+        // Calculate position dynamically at the moment the API call goes out.
+        // positionMs is the host position at startAt; offset by how much time has
+        // actually elapsed, plus a small estimate for Spotify's own play-start delay (~150ms).
+        // 250 ms ≈ typical Spotify /play API round-trip; adjust if you need tighter sync
+        const PLAY_LATENCY_ESTIMATE_MS = 250;
+        const currentPos = Math.max(0, positionMs + (Date.now() - startAt) + PLAY_LATENCY_ESTIMATE_MS);
+        await playTrack(token, spotifyDeviceIdRef.current, uri, currentPos);
         listenerCurrentTrackRef.current = uri;
         setSpotifyPlaying(true);
       } catch (err) {
@@ -232,9 +237,10 @@ export default function MusicSync() {
         setSpotifyPlaying(false);
       }
     };
-    const fireMs = Math.max(0, delay - 200);
-    if (fireMs > 0) setTimeout(() => doPlay(positionMs), fireMs);
-    else await doPlay(positionMs + Math.max(0, -delay));
+    // Fire 500 ms early so token fetch + network round-trip land at startAt
+    const fireMs = Math.max(0, delay - 500);
+    if (fireMs > 0) setTimeout(doPlay, fireMs);
+    else await doPlay();
   }, []);
 
   const execSpotifyPause = useCallback(async () => {
