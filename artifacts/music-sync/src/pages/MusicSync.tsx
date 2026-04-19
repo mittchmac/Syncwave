@@ -57,8 +57,8 @@ const POLL_INTERVAL_MS = 1000;
 const RESYNC_INTERVAL_MS = 5_000;
 const SYNC_LEAD_MS = 800;
 const PAUSE_CONFIRM_POLLS = 2;
-const DRIFT_CHECK_MS = 2000;   // listener self-correction interval
-const DRIFT_THRESHOLD_MS = 300; // seek if > 300 ms off
+const DRIFT_CHECK_MS = 6000;   // listener self-correction interval
+const DRIFT_THRESHOLD_MS = 600; // seek if > 600 ms off — avoids choppy micro-seeks
 
 // ── Logos ──────────────────────────────────────────────────────────────────
 
@@ -216,10 +216,17 @@ export default function MusicSync() {
     const isSameTrack = listenerCurrentTrackRef.current === uri;
     const player = spotifyPlayerRef.current;
     if (isSameTrack && player) {
-      // Same track — just seek to the right spot at startAt
+      // Same track — only seek if we're actually out of sync (avoids choppy micro-seeks)
       setTimeout(async () => {
-        const target = positionMs + Math.max(0, Date.now() - startAt);
-        try { await player.seek(Math.max(0, target)); setSpotifyPlaying(true); } catch { /* ignore */ }
+        try {
+          const state = await player.getCurrentState();
+          const target = positionMs + (Date.now() - startAt);
+          const drift = state ? Math.abs(state.position - target) : Infinity;
+          if (drift > DRIFT_THRESHOLD_MS) {
+            await player.seek(Math.max(0, target));
+          }
+          setSpotifyPlaying(true);
+        } catch { /* ignore */ }
       }, Math.max(0, delay));
       return;
     }
