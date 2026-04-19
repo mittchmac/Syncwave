@@ -53,10 +53,12 @@ function getWsUrl() {
   return `${proto}//${window.location.host}/ws`;
 }
 
-const POLL_INTERVAL_MS = 2500;
-const RESYNC_INTERVAL_MS = 15_000;
-const SYNC_LEAD_MS = 1200;
+const POLL_INTERVAL_MS = 1000;
+const RESYNC_INTERVAL_MS = 5_000;
+const SYNC_LEAD_MS = 800;
 const PAUSE_CONFIRM_POLLS = 2;
+const DRIFT_CHECK_MS = 2000;   // listener self-correction interval
+const DRIFT_THRESHOLD_MS = 300; // seek if > 300 ms off
 
 // ── Logos ──────────────────────────────────────────────────────────────────
 
@@ -186,6 +188,9 @@ export default function MusicSync() {
   const pendingApplePlayRef = useRef<{ songId: string; positionMs: number; startAt: number } | null>(null);
   const applePickerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const listenerServiceRef = useRef<ListenerService>(null);
+  // Tracks last known sync point so the drift-correction loop can self-heal
+  const lastSyncPointRef = useRef<{ positionMs: number; startAt: number } | null>(null);
+  const driftIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -229,6 +234,8 @@ export default function MusicSync() {
         const PLAY_LATENCY_ESTIMATE_MS = 250;
         const currentPos = Math.max(0, positionMs + (Date.now() - startAt) + PLAY_LATENCY_ESTIMATE_MS);
         await playTrack(token, spotifyDeviceIdRef.current, uri, currentPos);
+        // Record sync point so drift-correction loop knows where we should be
+        lastSyncPointRef.current = { positionMs, startAt };
         listenerCurrentTrackRef.current = uri;
         setSpotifyPlaying(true);
       } catch (err) {
@@ -537,6 +544,8 @@ export default function MusicSync() {
         setHostDisconnected(false);
         const svc = listenerServiceRef.current;
         if (svc === "spotify") {
+          // Update sync point immediately so drift loop has fresh data even before doPlay resolves
+          lastSyncPointRef.current = { positionMs: msg.positionMs, startAt: msg.startAt };
           setNowPlaying({ id: msg.trackUri, name: msg.trackName, artist: msg.artistName, albumArt: msg.albumArt });
           setSpotifyPlaying(true);
           execSpotifyPlay(msg.trackUri, msg.positionMs, msg.startAt);
@@ -695,11 +704,15 @@ export default function MusicSync() {
     return () => { mounted = false; };
   }, [audioEnabled, execApplePlay]);
 
-  // Stop sync intervals when leaving hosting phase
+  // Stop sync intervals when leaving hosting phase; stop drift loop when leaving listener phase
   useEffect(() => {
     if (phase !== "hosting") {
       if (syncIntervalRef.current) { clearInterval(syncIntervalRef.current); syncIntervalRef.current = null; isSyncingRef.current = false; setIsSyncing(false); }
       if (appleSyncIntervalRef.current) { clearInterval(appleSyncIntervalRef.current); appleSyncIntervalRef.current = null; appleIsSyncingRef.current = false; setAppleIsSyncing(false); }
+    }
+    if (phase !== "joined") {
+      if (driftIntervalRef.current) { clearInterval(driftIntervalRef.current); driftIntervalRef.current = null; }
+      lastSyncPointRef.current = null;
     }
   }, [phase]);
 
@@ -789,6 +802,24 @@ export default function MusicSync() {
       try { const state = await player.getCurrentState(); if (state && state.paused) await player.resume(); } catch { /* ignore */ }
     }
     send({ type: "request-sync" });
+    // Start listener-side drift correction: every DRIFT_CHECK_MS, compare the SDK's
+    // local position to where the sync math says we should be, and seek if off.
+    if (driftIntervalRef.current) clearInterval(driftIntervalRef.current);
+    driftIntervalRef.current = setInterval(async () => {
+      const pt = lastSyncPointRef.current;
+      const sdkPlayer = spotifyPlayerRef.current;
+      if (!pt || !sdkPlayer || !spotifyActivatedRef.current) return;
+      try {
+        const state = await sdkPlayer.getCurrentState();
+        if (!state || state.paused) return;
+        const expectedPos = pt.positionMs + (Date.now() - pt.startAt);
+        const actualPos = state.position;
+        const drift = actualPos - expectedPos;
+        if (Math.abs(drift) > DRIFT_THRESHOLD_MS) {
+          await sdkPlayer.seek(Math.max(0, expectedPos));
+        }
+      } catch { /* ignore SDK errors */ }
+    }, DRIFT_CHECK_MS);
   };
 
   const handleActivateApple = async () => {
