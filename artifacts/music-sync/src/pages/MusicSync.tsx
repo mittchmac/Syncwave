@@ -165,6 +165,7 @@ export default function MusicSync() {
   const spotifyPlayerRef = useRef<SpotifyPlayer | null>(null);
   const spotifyDeviceIdRef = useRef<string | null>(null);
   const pendingSpotifyPlayRef = useRef<{ uri: string; positionMs: number; startAt: number } | null>(null);
+  const pendingSpotifyByNameRef = useRef<{ songName: string; artistName: string; positionMs: number; startAt: number } | null>(null);
   const listenerCurrentTrackRef = useRef<string | null>(null);
   const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastTrackUriRef = useRef<string | null>(null);
@@ -253,7 +254,11 @@ export default function MusicSync() {
   const execSpotifyPlayByName = useCallback(async (songName: string, artistName: string, positionMs: number, startAt: number) => {
     const token = await getValidToken();
     const deviceId = spotifyDeviceIdRef.current;
-    if (!token || !deviceId || !spotifyActivatedRef.current) return;
+    if (!token || !deviceId || !spotifyActivatedRef.current) {
+      // Store pending — will be replayed once user taps "Start Listening"
+      pendingSpotifyByNameRef.current = { songName, artistName, positionMs, startAt };
+      return;
+    }
     try {
       // Try "song artist" first, fall back to song name only
       let tracks = await searchTracks(token, `${songName} ${artistName}`);
@@ -280,19 +285,23 @@ export default function MusicSync() {
     const targetSeconds = (positionMs + elapsed) / 1000;
     const doPlay = async () => {
       try {
-        // Must play first — seeking before buffering starts fails silently
-        await kit.setQueue({ song: songId });
+        // Try setQueue with song ID; fall back to songs array if needed
+        try {
+          await kit.setQueue({ song: songId });
+        } catch {
+          await kit.setQueue({ songs: [songId] });
+        }
         await kit.play();
         setApplePlaying(true);
-        // Seek after a short buffer delay so the track is loaded
+        // Seek after buffering starts
         if (targetSeconds > 0.5) {
           setTimeout(async () => {
             try { await kit.seekToTime(targetSeconds); } catch { /* ignore */ }
-          }, 1200);
+          }, 1500);
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Apple Music playback failed.";
-        setAppleError(msg);
+        const msg = err instanceof Error ? err.message : String(err);
+        setAppleError(`Playback failed: ${msg}. Try Force Sync.`);
         setApplePlaying(false);
       }
     };
@@ -758,6 +767,13 @@ export default function MusicSync() {
     spotifyActivatedRef.current = true;
     setSpotifyActivated(true);
     setListenerActivated(true);
+    // Drain any cross-service pending play (by name, e.g. from Apple host room)
+    const pendingByName = pendingSpotifyByNameRef.current;
+    if (pendingByName) {
+      pendingSpotifyByNameRef.current = null;
+      execSpotifyPlayByName(pendingByName.songName, pendingByName.artistName, pendingByName.positionMs, pendingByName.startAt);
+      return;
+    }
     const pending = pendingSpotifyPlayRef.current;
     if (pending) {
       pendingSpotifyPlayRef.current = null;
@@ -772,17 +788,21 @@ export default function MusicSync() {
   const handleActivateApple = async () => {
     const kit = appleKitRef.current;
     if (!kit) return;
-    // Unlock the browser's audio context while we're still inside the user gesture
+    // iOS Safari requires audio to be triggered synchronously within the gesture handler.
+    // Call kit.play() immediately (before any await) — it will throw since nothing is queued,
+    // but this unlocks MusicKit's internal <audio> element for future async play() calls.
+    kit.play().catch(() => { /* expected: nothing queued yet */ });
+    // Also unlock Web Audio API context
     try {
       const ctx = new AudioContext();
-      await ctx.resume();
-      const buf = ctx.createBuffer(1, 1, 22050);
-      const src = ctx.createBufferSource();
-      src.buffer = buf;
-      src.connect(ctx.destination);
-      src.start(0);
-      await new Promise<void>((r) => setTimeout(r, 50));
-      ctx.close();
+      ctx.resume().then(() => {
+        const buf = ctx.createBuffer(1, 1, 22050);
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.connect(ctx.destination);
+        src.start(0);
+        setTimeout(() => ctx.close(), 500);
+      }).catch(() => {});
     } catch { /* ignore */ }
     setListenerActivated(true);
     const pending = pendingApplePlayRef.current;
