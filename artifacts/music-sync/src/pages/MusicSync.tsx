@@ -191,6 +191,8 @@ export default function MusicSync() {
   // Tracks last known sync point so the drift-correction loop can self-heal
   const lastSyncPointRef = useRef<{ positionMs: number; startAt: number } | null>(null);
   const driftIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Guards against the drift loop issuing a seek while a new track is loading
+  const isLoadingTrackRef = useRef(false);
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -215,9 +217,12 @@ export default function MusicSync() {
     }
     const isSameTrack = listenerCurrentTrackRef.current === uri;
     const player = spotifyPlayerRef.current;
+
     if (isSameTrack && player) {
-      // Same track — only seek if we're actually out of sync (avoids choppy micro-seeks)
+      // Same track — only seek if actually out of sync; never interrupt while loading a new track
+      if (isLoadingTrackRef.current) return;
       setTimeout(async () => {
+        if (isLoadingTrackRef.current) return;
         try {
           const state = await player.getCurrentState();
           const target = positionMs + (Date.now() - startAt);
@@ -230,18 +235,28 @@ export default function MusicSync() {
       }, Math.max(0, delay));
       return;
     }
+
+    // New track — guard against duplicate concurrent loads
+    if (isLoadingTrackRef.current) {
+      // Store the latest event; whichever fires last wins
+      pendingSpotifyPlayRef.current = { uri, positionMs, startAt };
+      return;
+    }
+
+    // Clear stale sync point so the drift loop can't seek into the old song
+    isLoadingTrackRef.current = true;
+    lastSyncPointRef.current = null;
+
     const doPlay = async () => {
       try {
         const token = await getValidToken();
-        if (!token || !spotifyDeviceIdRef.current) return;
+        if (!token || !spotifyDeviceIdRef.current) { isLoadingTrackRef.current = false; return; }
         // Calculate position dynamically at the moment the API call goes out.
-        // positionMs is the host position at startAt; offset by how much time has
-        // actually elapsed, plus a small estimate for Spotify's own play-start delay (~150ms).
-        // 250 ms ≈ typical Spotify /play API round-trip; adjust if you need tighter sync
+        // 250 ms ≈ typical Spotify /play API round-trip; adjust if you need tighter sync.
         const PLAY_LATENCY_ESTIMATE_MS = 250;
         const currentPos = Math.max(0, positionMs + (Date.now() - startAt) + PLAY_LATENCY_ESTIMATE_MS);
         await playTrack(token, spotifyDeviceIdRef.current, uri, currentPos);
-        // Record sync point so drift-correction loop knows where we should be
+        // Record sync point now that playback has started
         lastSyncPointRef.current = { positionMs, startAt };
         listenerCurrentTrackRef.current = uri;
         setSpotifyPlaying(true);
@@ -249,6 +264,14 @@ export default function MusicSync() {
         const msg = err instanceof Error ? err.message : "Spotify playback failed.";
         setSpotifyError(msg);
         setSpotifyPlaying(false);
+      } finally {
+        isLoadingTrackRef.current = false;
+        // Drain any event that arrived while we were loading
+        const pending = pendingSpotifyPlayRef.current;
+        if (pending && pending.uri !== uri) {
+          pendingSpotifyPlayRef.current = null;
+          execSpotifyPlay(pending.uri, pending.positionMs, pending.startAt);
+        }
       }
     };
     // Fire 500 ms early so token fetch + network round-trip land at startAt
@@ -815,7 +838,8 @@ export default function MusicSync() {
     driftIntervalRef.current = setInterval(async () => {
       const pt = lastSyncPointRef.current;
       const sdkPlayer = spotifyPlayerRef.current;
-      if (!pt || !sdkPlayer || !spotifyActivatedRef.current) return;
+      // Skip entirely while a new track is loading — seeking now would cancel the load
+      if (!pt || !sdkPlayer || !spotifyActivatedRef.current || isLoadingTrackRef.current) return;
       try {
         const state = await sdkPlayer.getCurrentState();
         if (!state || state.paused) return;
