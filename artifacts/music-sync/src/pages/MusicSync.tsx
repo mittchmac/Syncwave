@@ -340,7 +340,7 @@ export default function MusicSync() {
           const seekTarget = Math.max(0, (positionMs + Math.max(0, Date.now() - startAt)) / 1000);
           const currentSec = kit.currentPlaybackTime ?? 0;
           const driftSec = Math.abs(currentSec - seekTarget);
-          if (driftSec > 2.5) {
+          if (driftSec > 0.5) {
             try { await kit.seekToTime(seekTarget); } catch { /* ignore */ }
           }
           if (kit.playbackState !== PlaybackState.playing) await kit.play();
@@ -976,7 +976,7 @@ export default function MusicSync() {
       const expectedSec = (pt.positionMs + (Date.now() - pt.startAt)) / 1000;
       const actualSec = kitInst.currentPlaybackTime ?? 0;
       const driftSec = Math.abs(actualSec - expectedSec);
-      if (driftSec > 2.5) {
+      if (driftSec > 0.5) {
         try { await kitInst.seekToTime(Math.max(0, expectedSec)); } catch { /* ignore */ }
       }
     }, DRIFT_CHECK_MS);
