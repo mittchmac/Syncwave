@@ -10,8 +10,8 @@ import {
   type SpotifyPlayer,
 } from "../lib/spotify";
 import {
-  loadMusicKit, getArtworkUrl, getLibraryArtworkUrl, PlaybackState,
-  type MusicKitInstance, type AppleMusicItem, type LibraryItem,
+  loadMusicKit, getArtworkUrl, PlaybackState,
+  type MusicKitInstance, type AppleMusicItem,
 } from "../lib/appleMusic";
 import { fetchStationsByTag, fetchTopUSStations, searchStationsByName, FEATURED_GENRES, type RadioStation } from "../lib/radioBrowser";
 
@@ -148,12 +148,6 @@ export default function MusicSync() {
   const [appleNowPlaying, setAppleNowPlaying] = useState<TrackInfo | null>(null);
   const [appleIsSyncing, setAppleIsSyncing] = useState(false);
   const [appleNoPlayback, setAppleNoPlayback] = useState(false);
-  // Apple host — song picker
-  const [appleLibraryPlaylists, setAppleLibraryPlaylists] = useState<LibraryItem[]>([]);
-  const [appleLibraryRecent, setAppleLibraryRecent] = useState<LibraryItem[]>([]);
-  const [appleLibraryLoading, setAppleLibraryLoading] = useState(false);
-  const [appleLibraryTab, setAppleLibraryTab] = useState<"playlists" | "recent">("playlists");
-  const [appleLibraryError, setAppleLibraryError] = useState<string | null>(null);
 
   // Listener service choice (independent of room mode)
   const [listenerService, setListenerService] = useState<ListenerService>(null);
@@ -734,10 +728,10 @@ export default function MusicSync() {
     return () => { mounted = false; };
   }, [audioEnabled, execApplePlay]);
 
-  // Auto-fetch Apple Music library when the host is in Apple mode and authorized
+  // Auto-start Apple sync as soon as the host enters Apple mode (mirrors Spotify host UX)
   useEffect(() => {
-    if (phase === "hosting" && roomMode === "apple" && appleAuthorized) {
-      fetchAppleLibrary();
+    if (phase === "hosting" && roomMode === "apple" && appleAuthorized && !appleIsSyncing) {
+      handleStartAppleSync();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, roomMode, appleAuthorized]);
@@ -886,46 +880,6 @@ export default function MusicSync() {
     else send({ type: "request-sync" });
   };
 
-  // Apple host — library browser
-  const fetchAppleLibrary = async () => {
-    const kit = appleKitRef.current;
-    if (!kit) return;
-    setAppleLibraryLoading(true);
-    setAppleLibraryError(null);
-    try {
-      const [playlistRes, recentRes] = await Promise.all([
-        kit.api.music("/v1/me/library/playlists", { limit: 25 }),
-        kit.api.music("/v1/me/library/recently-added", { limit: 25 }),
-      ]);
-      const playlists = ((playlistRes.data as { data?: LibraryItem[] }).data ?? []) as LibraryItem[];
-      const recent = ((recentRes.data as { data?: LibraryItem[] }).data ?? []).filter(
-        (i: LibraryItem) => i.type === "library-albums" || i.type === "library-playlists"
-      ) as LibraryItem[];
-      setAppleLibraryPlaylists(playlists);
-      setAppleLibraryRecent(recent);
-    } catch (err) {
-      setAppleLibraryError(err instanceof Error ? err.message : "Could not load your library.");
-    } finally {
-      setAppleLibraryLoading(false);
-    }
-  };
-
-  const handleApplePlayLibraryItem = async (item: LibraryItem) => {
-    const kit = appleKitRef.current;
-    if (!kit) return;
-    try {
-      if (item.type === "library-playlists") {
-        await kit.setQueue({ playlist: item.id });
-      } else {
-        await kit.setQueue({ album: item.id });
-      }
-      await kit.play();
-      setApplePlaying(true);
-      if (!appleIsSyncing) handleStartAppleSync();
-      // Poll immediately so the now-playing card updates right away
-      applePollAndSync();
-    } catch (err) { setAppleError(err instanceof Error ? err.message : "Could not play this item."); }
-  };
 
   const handleForceSync = () => {
     if (phase === "hosting") {
@@ -1186,68 +1140,24 @@ export default function MusicSync() {
             <RoomCodeCard />
             <div className="bg-card border border-card-border rounded-2xl p-6 space-y-4 shadow-lg">
               <h3 className="text-sm font-semibold flex items-center gap-2"><AppleLogo size={4} className="fill-pink-400" /> Apple Music Auto-Sync</h3>
-              {!appleIsSyncing && !appleNowPlaying && (
-                <div className="bg-secondary/50 rounded-xl p-4 space-y-2">
-                  <p className="text-xs font-medium">How it works</p>
-                  <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
-                    <li>Tap a playlist or album below — it starts playing immediately</li>
-                    <li>Tap <strong className="text-foreground">Start Syncing</strong> to share with the listener</li>
-                    <li>Switch playlists anytime; the listener follows automatically</li>
-                  </ol>
-                  <p className="text-xs text-muted-foreground/70 pt-1">Note: Apple Music plays through this browser tab (not the native app)</p>
+              {/* Waiting-for-playback state */}
+              {appleNoPlayback && (
+                <div className="bg-secondary/50 rounded-2xl p-5 flex flex-col items-center gap-3 text-center">
+                  <div className="w-12 h-12 rounded-full bg-pink-500/10 flex items-center justify-center">
+                    <AppleLogo size={6} className="fill-pink-400" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold">Open Apple Music &amp; play anything</p>
+                    <p className="text-xs text-muted-foreground mt-1">SyncWave will detect it and sync to the listener automatically</p>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-xs text-pink-400">
+                    <div className="w-1.5 h-1.5 rounded-full bg-pink-400 animate-pulse" />
+                    Listening for playback…
+                  </div>
                 </div>
               )}
 
-              {/* Library browser */}
-              <div className="space-y-2">
-                {/* Tabs */}
-                <div className="flex gap-1 bg-secondary/50 rounded-lg p-1">
-                  {(["playlists", "recent"] as const).map((tab) => (
-                    <button key={tab} onClick={() => setAppleLibraryTab(tab)}
-                      className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all capitalize ${appleLibraryTab === tab ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
-                      {tab === "playlists" ? "Playlists" : "Recently Added"}
-                    </button>
-                  ))}
-                </div>
-
-                {appleLibraryLoading && (
-                  <div className="flex items-center justify-center py-6">
-                    <div className="w-5 h-5 border-2 border-pink-400 border-t-transparent rounded-full animate-spin" />
-                  </div>
-                )}
-
-                {appleLibraryError && (
-                  <div className="bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2.5 text-red-400 text-xs flex items-center justify-between">
-                    <span>{appleLibraryError}</span>
-                    <button onClick={fetchAppleLibrary} className="underline ml-2">Retry</button>
-                  </div>
-                )}
-
-                {!appleLibraryLoading && !appleLibraryError && (
-                  <div className="space-y-1 max-h-52 overflow-y-auto rounded-xl border border-border overflow-hidden">
-                    {(appleLibraryTab === "playlists" ? appleLibraryPlaylists : appleLibraryRecent).map((item) => (
-                      <button key={item.id} onClick={() => handleApplePlayLibraryItem(item)}
-                        className="w-full flex items-center gap-3 p-2.5 hover:bg-accent/50 active:scale-[0.98] transition-all text-left">
-                        {getLibraryArtworkUrl(item, 80)
-                          ? <img src={getLibraryArtworkUrl(item, 80)} alt="" className="w-10 h-10 rounded-lg object-cover flex-shrink-0 bg-secondary" />
-                          : <div className="w-10 h-10 rounded-lg bg-secondary flex-shrink-0 flex items-center justify-center"><AppleLogo size={4} className="fill-pink-400 opacity-50" /></div>}
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{item.attributes.name}</p>
-                          <p className="text-xs text-muted-foreground truncate capitalize">
-                            {item.type === "library-playlists" ? "Playlist" : "Album"}
-                            {item.attributes.trackCount ? ` · ${item.attributes.trackCount} songs` : ""}
-                          </p>
-                        </div>
-                        <Play className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
-                      </button>
-                    ))}
-                    {(appleLibraryTab === "playlists" ? appleLibraryPlaylists : appleLibraryRecent).length === 0 && !appleLibraryLoading && (
-                      <p className="text-xs text-muted-foreground text-center py-4">Nothing found in your library</p>
-                    )}
-                  </div>
-                )}
-              </div>
-
+              {/* Now playing */}
               {appleNowPlaying && (
                 <div className="space-y-1.5">
                   <p className="text-xs text-muted-foreground font-medium">Now playing</p>
@@ -1255,18 +1165,16 @@ export default function MusicSync() {
                 </div>
               )}
 
-              {appleIsSyncing && appleNoPlayback && <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-3 py-2.5 text-yellow-400 text-xs">Pick a playlist or album above to start syncing</div>}
-              {appleIsSyncing && !appleNoPlayback && appleNowPlaying && <div className="flex items-center gap-2 text-xs text-pink-400"><RefreshCw className="w-3.5 h-3.5 animate-spin" />Live · the listener is following your playback</div>}
+              {appleIsSyncing && !appleNoPlayback && appleNowPlaying && (
+                <div className="flex items-center gap-2 text-xs text-pink-400">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />Live · the listener is following your playback
+                </div>
+              )}
 
-              {!appleIsSyncing
-                ? <button onClick={handleStartAppleSync} disabled={!appleNowPlaying}
-                    className="w-full flex items-center justify-center gap-2 py-4 rounded-xl bg-pink-500 text-white font-bold text-base hover:opacity-90 active:scale-[0.97] transition-all shadow-lg disabled:opacity-40">
-                    <AppleLogo size={5} className="fill-white" /> Start Syncing
-                  </button>
-                : <div className="space-y-2">
-                    <button onClick={handleStopAppleSync} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-secondary font-semibold hover:bg-accent active:scale-[0.97] transition-all"><Pause className="w-4 h-4" /> Stop Syncing</button>
-                    <button onClick={handleForceSync} className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-secondary/60 text-muted-foreground text-xs font-medium hover:bg-accent hover:text-foreground active:scale-[0.97] transition-all"><RefreshCw className="w-3.5 h-3.5" /> Force Sync</button>
-                  </div>}
+              <div className="space-y-2">
+                <button onClick={handleStopAppleSync} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-secondary font-semibold hover:bg-accent active:scale-[0.97] transition-all"><Pause className="w-4 h-4" /> Stop Syncing</button>
+                <button onClick={handleForceSync} className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-secondary/60 text-muted-foreground text-xs font-medium hover:bg-accent hover:text-foreground active:scale-[0.97] transition-all"><RefreshCw className="w-3.5 h-3.5" /> Force Sync</button>
+              </div>
               <p className="text-xs text-muted-foreground text-center">Apple Music subscription required on both phones</p>
             </div>
           </div>
