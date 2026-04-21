@@ -169,6 +169,8 @@ export default function MusicSync() {
   const pendingSpotifyPlayRef = useRef<{ uri: string; positionMs: number; startAt: number } | null>(null);
   const pendingSpotifyByNameRef = useRef<{ songName: string; artistName: string; positionMs: number; startAt: number } | null>(null);
   const listenerCurrentTrackRef = useRef<string | null>(null);
+  const appleListenerCurrentIdRef = useRef<string | null>(null); // last MusicKit song ID played as listener
+  const appleNameToIdCacheRef = useRef<Map<string, string>>(new Map()); // songName+artist → Apple Music song ID
   const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastTrackUriRef = useRef<string | null>(null);
   const lastIsPlayingRef = useRef<boolean>(false);
@@ -327,21 +329,41 @@ export default function MusicSync() {
     const waitMs = Math.max(0, delay - 300);
     const elapsed = Math.max(0, -delay);
     const targetSeconds = (positionMs + elapsed) / 1000;
+
     const doPlay = async () => {
       try {
-        // Try setQueue with song ID; fall back to songs array if needed
-        try {
-          await kit.setQueue({ song: songId });
-        } catch {
-          await kit.setQueue({ songs: [songId] });
-        }
-        await kit.play();
-        setApplePlaying(true);
-        // Seek after buffering starts
-        if (targetSeconds > 0.5) {
-          setTimeout(async () => {
-            try { await kit.seekToTime(targetSeconds); } catch { /* ignore */ }
-          }, 1500);
+        const currentId = kit.nowPlayingItem?.id ?? appleListenerCurrentIdRef.current;
+        const sameTrack = currentId === songId;
+
+        if (sameTrack) {
+          // Same track already loaded — just seek to correct position, no queue reload
+          const seekTarget = Math.max(0, (positionMs + Math.max(0, Date.now() - startAt)) / 1000);
+          try { await kit.seekToTime(seekTarget); } catch { /* ignore */ }
+          if (kit.playbackState !== PlaybackState.playing) await kit.play();
+          setApplePlaying(true);
+        } else {
+          // Different track — load it and play
+          appleListenerCurrentIdRef.current = songId;
+          isLoadingTrackRef.current = true;
+          try {
+            try { await kit.setQueue({ song: songId }); } catch { await kit.setQueue({ songs: [songId] }); }
+            await kit.play();
+            setApplePlaying(true);
+            // Seek to correct position after buffering
+            if (targetSeconds > 0.5) {
+              setTimeout(async () => {
+                try { await kit.seekToTime(targetSeconds); } catch { /* ignore */ }
+                isLoadingTrackRef.current = false;
+              }, 1500);
+            } else {
+              setTimeout(() => { isLoadingTrackRef.current = false; }, 1000);
+            }
+          } catch (err) {
+            isLoadingTrackRef.current = false;
+            const msg = err instanceof Error ? err.message : String(err);
+            setAppleError(`Playback failed: ${msg}. Try Force Sync.`);
+            setApplePlaying(false);
+          }
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -370,9 +392,21 @@ export default function MusicSync() {
   const execApplePlayByName = useCallback(async (songName: string, artistName: string, positionMs: number, startAt: number) => {
     const kit = appleKitRef.current;
     if (!kit || !kit.isAuthorized) return;
+    if (isLoadingTrackRef.current) return; // still loading previous track, skip
     try {
+      const cacheKey = `${songName}|||${artistName}`;
+      let songId = appleNameToIdCacheRef.current.get(cacheKey) ?? null;
+
+      // If the cached/current song is already playing, skip the search entirely
+      const alreadyPlaying = songId && songId === (kit.nowPlayingItem?.id ?? appleListenerCurrentIdRef.current);
+      if (alreadyPlaying) {
+        // Same track — just drift-correct the position
+        await execApplePlay(songId!, positionMs, startAt);
+        return;
+      }
+
+      // New track — search the catalog
       const storefront = kit.storefrontId || "us";
-      // Try "song + artist" first, fall back to song name only
       let songs: AppleMusicItem[] = [];
       const r1 = await kit.api.music(`/v1/catalog/${storefront}/search`, { term: `${songName} ${artistName}`, types: "songs", limit: 5 });
       songs = r1.data.results?.songs?.data ?? [];
@@ -382,6 +416,7 @@ export default function MusicSync() {
       }
       if (!songs.length) { setAppleError(`Could not find "${songName}" on Apple Music.`); return; }
       const song = songs[0];
+      appleNameToIdCacheRef.current.set(cacheKey, song.id);
       const albumArt = getArtworkUrl(song, 300);
       setAppleNowPlaying({ id: song.id, name: song.attributes.name, artist: song.attributes.artistName, albumArt });
       const elapsed = Math.max(0, Date.now() - startAt);
@@ -781,6 +816,8 @@ export default function MusicSync() {
     if (phase !== "joined") {
       if (driftIntervalRef.current) { clearInterval(driftIntervalRef.current); driftIntervalRef.current = null; }
       lastSyncPointRef.current = null;
+      appleListenerCurrentIdRef.current = null;
+      appleNameToIdCacheRef.current.clear();
     }
   }, [phase]);
 
