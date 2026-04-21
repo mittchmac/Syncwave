@@ -482,11 +482,28 @@ export default function MusicSync() {
     appleLastSongIdRef.current = null; appleLastIsPlayingRef.current = false; appleLastResyncRef.current = 0; applePauseCntRef.current = 0;
     applePollAndSync();
     appleSyncIntervalRef.current = setInterval(applePollAndSync, POLL_INTERVAL_MS);
+
+    // Instant event-driven updates: fire the poll immediately on any MusicKit state change
+    const kit = appleKitRef.current;
+    if (kit) {
+      const onItemChange = () => { if (appleIsSyncingRef.current) applePollAndSync(); };
+      const onStateChange = () => { if (appleIsSyncingRef.current) applePollAndSync(); };
+      kit.addEventListener("nowPlayingItemDidChange", onItemChange);
+      kit.addEventListener("playbackStateDidChange", onStateChange);
+      // Store removers on the interval ref's sibling so we can clean up
+      (appleSyncIntervalRef as React.MutableRefObject<ReturnType<typeof setInterval> | null & { _rm?: () => void }>).current;
+      (kit as unknown as { _swRemoveListeners?: () => void })._swRemoveListeners = () => {
+        kit.removeEventListener("nowPlayingItemDidChange", onItemChange);
+        kit.removeEventListener("playbackStateDidChange", onStateChange);
+      };
+    }
   }, [applePollAndSync]);
 
   const handleStopAppleSync = useCallback(() => {
     appleIsSyncingRef.current = false; setAppleIsSyncing(false);
     if (appleSyncIntervalRef.current) { clearInterval(appleSyncIntervalRef.current); appleSyncIntervalRef.current = null; }
+    const kit = appleKitRef.current;
+    if (kit) { (kit as unknown as { _swRemoveListeners?: () => void })._swRemoveListeners?.(); }
     send({ type: "apple-pause" }); setApplePlaying(false);
   }, [send]);
 
@@ -900,13 +917,13 @@ export default function MusicSync() {
   };
 
 
-  // Fallback: debounced search in the Apple Music catalog so host can tell SyncWave what's playing
-  const handleAppleFallbackSearch = (q: string) => {
+  // Apple host: search the catalog to find a starting song
+  const handleAppleStartSearch = (q: string) => {
     setAppleFallbackQuery(q);
     if (appleFallbackSearchTimerRef.current) clearTimeout(appleFallbackSearchTimerRef.current);
     if (!q.trim()) { setAppleFallbackResults([]); return; }
     appleFallbackSearchTimerRef.current = setTimeout(async () => {
-      const kit = window.MusicKit?.getInstance();
+      const kit = appleKitRef.current ?? window.MusicKit?.getInstance();
       if (!kit) return;
       setAppleFallbackLoading(true);
       try {
@@ -914,28 +931,30 @@ export default function MusicSync() {
         const res = await kit.api.music(`/v1/catalog/${storefront}/search`, { term: q, types: "songs", limit: 6 });
         const songs: AppleMusicItem[] = res.data?.results?.songs?.data ?? [];
         setAppleFallbackResults(songs);
-      } catch (e) { console.warn("Apple fallback search:", e); }
+      } catch (e) { console.warn("Apple start search:", e); }
       setAppleFallbackLoading(false);
     }, 400);
   };
 
-  // Fallback: host manually picks a song — broadcast it as if the sync loop detected it
-  const handleAppleFallbackPick = (song: AppleMusicItem) => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    const startAt = Date.now() + SYNC_LEAD_MS;
-    const positionMs = SYNC_LEAD_MS; // start from near beginning
-    const albumArt = getArtworkUrl(song, 300);
-    const info: TrackInfo = { id: song.id, name: song.attributes.name, artist: song.attributes.artistName, albumArt };
-    setAppleNowPlaying(info);
-    setAppleNoPlayback(false);
-    setShowAppleFallback(false);
+  // Apple host: tap a song → MusicKit plays it → sync loop takes over automatically
+  const handleAppleStartPick = async (song: AppleMusicItem) => {
+    const kit = appleKitRef.current ?? window.MusicKit?.getInstance();
+    if (!kit) return;
     setAppleFallbackQuery("");
     setAppleFallbackResults([]);
-    appleLastSongIdRef.current = song.id;
-    // "albumArt" must match what the server's WsMessage type expects
-    const msg = JSON.stringify({ type: "apple-play", songId: song.id, songName: song.attributes.name, artistName: song.attributes.artistName, albumArt, positionMs, startAt });
-    ws.send(msg);
+    try {
+      // Start playback through MusicKit — nowPlayingItem will reflect this instantly
+      try { await kit.setQueue({ song: song.id }); } catch { await kit.setQueue({ songs: [song.id] }); }
+      await kit.play();
+      // The applePollAndSync loop + nowPlayingItemDidChange event will handle the rest
+    } catch (err) {
+      console.warn("Apple start pick:", err);
+      // Even if MusicKit play fails, fire a broadcast so the listener can try
+      const albumArt = getArtworkUrl(song, 300);
+      const startAt = Date.now() + SYNC_LEAD_MS;
+      const msg = JSON.stringify({ type: "apple-play", songId: song.id, songName: song.attributes.name, artistName: song.attributes.artistName, albumArt, positionMs: SYNC_LEAD_MS, startAt });
+      wsRef.current?.send(msg);
+    }
   };
 
   const handleForceSync = () => {
@@ -1197,7 +1216,7 @@ export default function MusicSync() {
             <RoomCodeCard />
             <div className="bg-card border border-card-border rounded-2xl p-6 space-y-4 shadow-lg">
               <h3 className="text-sm font-semibold flex items-center gap-2"><AppleLogo size={4} className="fill-pink-400" /> Apple Music Auto-Sync</h3>
-              {/* Waiting-for-playback state */}
+              {/* Waiting-for-playback state: pick a starting song to hand off to MusicKit */}
               {appleNoPlayback && (
                 <div className="bg-secondary/50 rounded-2xl p-5 flex flex-col gap-3">
                   <div className="flex items-center gap-3">
@@ -1205,18 +1224,16 @@ export default function MusicSync() {
                       <AppleLogo size={5} className="fill-pink-400" />
                     </div>
                     <div>
-                      <p className="text-sm font-semibold">What are you playing?</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">Search the song you have open in Apple Music</p>
+                      <p className="text-sm font-semibold">Pick a song to start</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Tap once — after that skip, pause, and change songs freely</p>
                     </div>
                   </div>
-
-                  {/* Always show search — native detection is a silent bonus */}
                   <div>
                     <input
                       type="text"
                       value={appleFallbackQuery}
-                      onChange={e => handleAppleFallbackSearch(e.target.value)}
-                      placeholder="Search song name…"
+                      onChange={e => handleAppleStartSearch(e.target.value)}
+                      placeholder="Search Apple Music…"
                       className="w-full bg-secondary border border-white/10 rounded-xl px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-pink-500/60"
                     />
                     {appleFallbackLoading && <p className="text-xs text-muted-foreground text-center mt-2">Searching…</p>}
@@ -1225,7 +1242,7 @@ export default function MusicSync() {
                         {appleFallbackResults.map(song => (
                           <button
                             key={song.id}
-                            onClick={() => handleAppleFallbackPick(song)}
+                            onClick={() => handleAppleStartPick(song)}
                             className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pink-500/10 active:scale-[0.97] transition-all text-left"
                           >
                             {song.attributes.artwork?.url && <img src={getArtworkUrl(song, 60)} className="w-8 h-8 rounded-lg flex-shrink-0" />}
@@ -1235,12 +1252,6 @@ export default function MusicSync() {
                             </div>
                           </button>
                         ))}
-                      </div>
-                    )}
-                    {!appleFallbackLoading && !appleFallbackResults.length && !appleFallbackQuery && (
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-2 justify-center">
-                        <div className="w-1.5 h-1.5 rounded-full bg-pink-400 animate-pulse" />
-                        Also watching for automatic detection…
                       </div>
                     )}
                   </div>
