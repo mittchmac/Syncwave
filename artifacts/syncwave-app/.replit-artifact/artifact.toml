@@ -1,0 +1,27 @@
+kind = "mobile"
+previewPath = "/syncwave-app/"
+title = "SyncWave"
+version = "1.0.0"
+id = "artifacts/syncwave-app"
+router = "expo-domain"
+
+[[integratedSkills]]
+name = "expo"
+version = "1.0.0"
+
+[[services]]
+ensurePreviewReachable = "/status"
+name = "expo"
+paths = [ "/syncwave-app/" ]
+localPort = 18844
+
+[services.development]
+run = "pnpm --filter @workspace/syncwave-app run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/syncwave-app", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/syncwave-app", "run", "serve" ]
+
+[services.env]
+PORT = "18844"
+BASE_PATH = "/syncwave-app/"

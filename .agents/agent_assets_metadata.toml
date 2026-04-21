@@ -1,0 +1,8 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "tMmD7QrAsm0EjkeWU9nip"
+uri = "file://attached_assets/syncwave-icon.png"
+type = "image"
+title = "syncwave app icon"
