@@ -39,7 +39,14 @@ export interface MusicKitInstance {
   play(): Promise<void>;
   pause(): Promise<void>;
   seekToTime(time: number): Promise<void>;
-  setQueue(options: { song?: string; songs?: string[]; startPosition?: number }): Promise<void>;
+  setQueue(options: {
+    song?: string;
+    songs?: string[];
+    playlist?: string;
+    album?: string;
+    url?: string;
+    startPosition?: number;
+  }): Promise<void>;
   changeToMediaAtIndex(index: number): Promise<void>;
   addEventListener(event: string, handler: (e: unknown) => void): void;
   removeEventListener(event: string, handler: (e: unknown) => void): void;
@@ -72,6 +79,23 @@ export interface AppleCatalogResponse {
   };
   // direct data array (for single-resource endpoints like /songs/{id})
   data?: AppleMusicItem[];
+}
+
+/** A library playlist or recently-added album */
+export interface LibraryItem {
+  id: string;
+  type: "library-playlists" | "library-albums";
+  attributes: {
+    name: string;
+    artwork?: { url: string; width?: number; height?: number };
+    trackCount?: number;
+  };
+}
+
+export function getLibraryArtworkUrl(item: LibraryItem, size = 200): string {
+  const url = item.attributes.artwork?.url;
+  if (!url) return "";
+  return url.replace("{w}", String(size)).replace("{h}", String(size));
 }
 
 let _devToken: string | null = null;

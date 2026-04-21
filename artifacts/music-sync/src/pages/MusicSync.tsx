@@ -10,8 +10,8 @@ import {
   type SpotifyPlayer,
 } from "../lib/spotify";
 import {
-  loadMusicKit, getArtworkUrl, PlaybackState,
-  type MusicKitInstance, type AppleMusicItem,
+  loadMusicKit, getArtworkUrl, getLibraryArtworkUrl, PlaybackState,
+  type MusicKitInstance, type AppleMusicItem, type LibraryItem,
 } from "../lib/appleMusic";
 import { fetchStationsByTag, fetchTopUSStations, searchStationsByName, FEATURED_GENRES, type RadioStation } from "../lib/radioBrowser";
 
@@ -149,10 +149,11 @@ export default function MusicSync() {
   const [appleIsSyncing, setAppleIsSyncing] = useState(false);
   const [appleNoPlayback, setAppleNoPlayback] = useState(false);
   // Apple host — song picker
-  const [applePickerQuery, setApplePickerQuery] = useState("");
-  const [applePickerResults, setApplePickerResults] = useState<AppleMusicItem[]>([]);
-  const [applePickerLoading, setApplePickerLoading] = useState(false);
-  const [applePickerOpen, setApplePickerOpen] = useState(false);
+  const [appleLibraryPlaylists, setAppleLibraryPlaylists] = useState<LibraryItem[]>([]);
+  const [appleLibraryRecent, setAppleLibraryRecent] = useState<LibraryItem[]>([]);
+  const [appleLibraryLoading, setAppleLibraryLoading] = useState(false);
+  const [appleLibraryTab, setAppleLibraryTab] = useState<"playlists" | "recent">("playlists");
+  const [appleLibraryError, setAppleLibraryError] = useState<string | null>(null);
 
   // Listener service choice (independent of room mode)
   const [listenerService, setListenerService] = useState<ListenerService>(null);
@@ -186,7 +187,6 @@ export default function MusicSync() {
   const appleLastResyncRef = useRef<number>(0);
   const applePauseCntRef = useRef<number>(0);
   const pendingApplePlayRef = useRef<{ songId: string; positionMs: number; startAt: number } | null>(null);
-  const applePickerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const listenerServiceRef = useRef<ListenerService>(null);
   // Tracks last known sync point so the drift-correction loop can self-heal
   const lastSyncPointRef = useRef<{ positionMs: number; startAt: number } | null>(null);
@@ -734,6 +734,14 @@ export default function MusicSync() {
     return () => { mounted = false; };
   }, [audioEnabled, execApplePlay]);
 
+  // Auto-fetch Apple Music library when the host is in Apple mode and authorized
+  useEffect(() => {
+    if (phase === "hosting" && roomMode === "apple" && appleAuthorized) {
+      fetchAppleLibrary();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, roomMode, appleAuthorized]);
+
   // Stop sync intervals when leaving hosting phase; stop drift loop when leaving listener phase
   useEffect(() => {
     if (phase !== "hosting") {
@@ -878,41 +886,45 @@ export default function MusicSync() {
     else send({ type: "request-sync" });
   };
 
-  // Apple host — song picker (to set the initial song; then they can use Apple Music app controls)
-  const handleApplePickerSearch = (q: string) => {
-    setApplePickerQuery(q);
-    if (applePickerTimerRef.current) clearTimeout(applePickerTimerRef.current);
-    if (!q.trim()) { setApplePickerResults([]); return; }
-    applePickerTimerRef.current = setTimeout(async () => {
-      const kit = appleKitRef.current;
-      if (!kit) return;
-      setApplePickerLoading(true);
-      try {
-        const storefront = kit.storefrontId || "us";
-        const res = await kit.api.music(`/v1/catalog/${storefront}/search`, { term: q, types: "songs", limit: 8 });
-        setApplePickerResults(res.data.results?.songs?.data ?? []);
-      } catch { setApplePickerResults([]); }
-      finally { setApplePickerLoading(false); }
-    }, 500);
+  // Apple host — library browser
+  const fetchAppleLibrary = async () => {
+    const kit = appleKitRef.current;
+    if (!kit) return;
+    setAppleLibraryLoading(true);
+    setAppleLibraryError(null);
+    try {
+      const [playlistRes, recentRes] = await Promise.all([
+        kit.api.music("/v1/me/library/playlists", { limit: 25 }),
+        kit.api.music("/v1/me/library/recently-added", { limit: 25 }),
+      ]);
+      const playlists = ((playlistRes.data as { data?: LibraryItem[] }).data ?? []) as LibraryItem[];
+      const recent = ((recentRes.data as { data?: LibraryItem[] }).data ?? []).filter(
+        (i: LibraryItem) => i.type === "library-albums" || i.type === "library-playlists"
+      ) as LibraryItem[];
+      setAppleLibraryPlaylists(playlists);
+      setAppleLibraryRecent(recent);
+    } catch (err) {
+      setAppleLibraryError(err instanceof Error ? err.message : "Could not load your library.");
+    } finally {
+      setAppleLibraryLoading(false);
+    }
   };
 
-  const handleApplePickSong = async (item: AppleMusicItem) => {
+  const handleApplePlayLibraryItem = async (item: LibraryItem) => {
     const kit = appleKitRef.current;
     if (!kit) return;
     try {
-      await kit.setQueue({ song: item.id, startPosition: 0 });
-      await kit.seekToTime(0);
+      if (item.type === "library-playlists") {
+        await kit.setQueue({ playlist: item.id });
+      } else {
+        await kit.setQueue({ album: item.id });
+      }
       await kit.play();
-      setAppleNowPlaying({ id: item.id, name: item.attributes.name, artist: item.attributes.artistName, albumArt: getArtworkUrl(item, 300) });
       setApplePlaying(true);
-      setApplePickerResults([]);
-      setApplePickerQuery("");
-      setApplePickerOpen(false);
-      // Immediately broadcast
-      const startAt = Date.now() + SYNC_LEAD_MS;
-      send({ type: "apple-play", songId: item.id, songName: item.attributes.name, artistName: item.attributes.artistName, albumArt: getArtworkUrl(item, 300), positionMs: SYNC_LEAD_MS, startAt });
       if (!appleIsSyncing) handleStartAppleSync();
-    } catch (err) { setAppleError(err instanceof Error ? err.message : "Could not play this song."); }
+      // Poll immediately so the now-playing card updates right away
+      applePollAndSync();
+    } catch (err) { setAppleError(err instanceof Error ? err.message : "Could not play this item."); }
   };
 
   const handleForceSync = () => {
@@ -1178,40 +1190,63 @@ export default function MusicSync() {
                 <div className="bg-secondary/50 rounded-xl p-4 space-y-2">
                   <p className="text-xs font-medium">How it works</p>
                   <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
-                    <li>Search for a song below and tap it to start playing</li>
-                    <li>Tap <strong className="text-foreground">Start Syncing</strong> — the listener hears the same song</li>
-                    <li>Search and pick new songs anytime; the listener follows automatically</li>
+                    <li>Tap a playlist or album below — it starts playing immediately</li>
+                    <li>Tap <strong className="text-foreground">Start Syncing</strong> to share with the listener</li>
+                    <li>Switch playlists anytime; the listener follows automatically</li>
                   </ol>
-                  <p className="text-xs text-muted-foreground/70 pt-1">Note: Apple Music plays through this browser tab (not the Apple Music app)</p>
+                  <p className="text-xs text-muted-foreground/70 pt-1">Note: Apple Music plays through this browser tab (not the native app)</p>
                 </div>
               )}
 
-              {/* Song search */}
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
-                <input type="text" placeholder="Search Apple Music…" value={applePickerQuery}
-                  onChange={(e) => { setApplePickerOpen(true); handleApplePickerSearch(e.target.value); }}
-                  onFocus={() => setApplePickerOpen(true)}
-                  className="w-full bg-secondary/60 border border-border rounded-lg pl-9 pr-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring" />
-                {applePickerLoading && <div className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 border border-pink-400 border-t-transparent rounded-full animate-spin" />}
-                {applePickerQuery && !applePickerLoading && <button onClick={() => { setApplePickerQuery(""); setApplePickerResults([]); setApplePickerOpen(false); }} className="absolute right-3 top-1/2 -translate-y-1/2"><X className="w-3.5 h-3.5 text-muted-foreground" /></button>}
-              </div>
-
-              {applePickerOpen && applePickerResults.length > 0 && (
-                <div className="space-y-1 max-h-56 overflow-y-auto border border-border rounded-xl overflow-hidden">
-                  {applePickerResults.map((item) => (
-                    <button key={item.id} onClick={() => handleApplePickSong(item)}
-                      className="w-full flex items-center gap-3 p-2.5 hover:bg-accent/50 active:scale-[0.98] transition-all text-left">
-                      <img src={getArtworkUrl(item, 80)} alt="" className="w-10 h-10 rounded-lg object-cover flex-shrink-0 bg-secondary" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">{item.attributes.name}</p>
-                        <p className="text-xs text-muted-foreground truncate">{item.attributes.artistName}</p>
-                      </div>
-                      <Play className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+              {/* Library browser */}
+              <div className="space-y-2">
+                {/* Tabs */}
+                <div className="flex gap-1 bg-secondary/50 rounded-lg p-1">
+                  {(["playlists", "recent"] as const).map((tab) => (
+                    <button key={tab} onClick={() => setAppleLibraryTab(tab)}
+                      className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all capitalize ${appleLibraryTab === tab ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+                      {tab === "playlists" ? "Playlists" : "Recently Added"}
                     </button>
                   ))}
                 </div>
-              )}
+
+                {appleLibraryLoading && (
+                  <div className="flex items-center justify-center py-6">
+                    <div className="w-5 h-5 border-2 border-pink-400 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                )}
+
+                {appleLibraryError && (
+                  <div className="bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2.5 text-red-400 text-xs flex items-center justify-between">
+                    <span>{appleLibraryError}</span>
+                    <button onClick={fetchAppleLibrary} className="underline ml-2">Retry</button>
+                  </div>
+                )}
+
+                {!appleLibraryLoading && !appleLibraryError && (
+                  <div className="space-y-1 max-h-52 overflow-y-auto rounded-xl border border-border overflow-hidden">
+                    {(appleLibraryTab === "playlists" ? appleLibraryPlaylists : appleLibraryRecent).map((item) => (
+                      <button key={item.id} onClick={() => handleApplePlayLibraryItem(item)}
+                        className="w-full flex items-center gap-3 p-2.5 hover:bg-accent/50 active:scale-[0.98] transition-all text-left">
+                        {getLibraryArtworkUrl(item, 80)
+                          ? <img src={getLibraryArtworkUrl(item, 80)} alt="" className="w-10 h-10 rounded-lg object-cover flex-shrink-0 bg-secondary" />
+                          : <div className="w-10 h-10 rounded-lg bg-secondary flex-shrink-0 flex items-center justify-center"><AppleLogo size={4} className="fill-pink-400 opacity-50" /></div>}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{item.attributes.name}</p>
+                          <p className="text-xs text-muted-foreground truncate capitalize">
+                            {item.type === "library-playlists" ? "Playlist" : "Album"}
+                            {item.attributes.trackCount ? ` · ${item.attributes.trackCount} songs` : ""}
+                          </p>
+                        </div>
+                        <Play className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+                      </button>
+                    ))}
+                    {(appleLibraryTab === "playlists" ? appleLibraryPlaylists : appleLibraryRecent).length === 0 && !appleLibraryLoading && (
+                      <p className="text-xs text-muted-foreground text-center py-4">Nothing found in your library</p>
+                    )}
+                  </div>
+                )}
+              </div>
 
               {appleNowPlaying && (
                 <div className="space-y-1.5">
@@ -1220,7 +1255,7 @@ export default function MusicSync() {
                 </div>
               )}
 
-              {appleIsSyncing && appleNoPlayback && <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-3 py-2.5 text-yellow-400 text-xs">Search and pick a song above to start syncing</div>}
+              {appleIsSyncing && appleNoPlayback && <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-3 py-2.5 text-yellow-400 text-xs">Pick a playlist or album above to start syncing</div>}
               {appleIsSyncing && !appleNoPlayback && appleNowPlaying && <div className="flex items-center gap-2 text-xs text-pink-400"><RefreshCw className="w-3.5 h-3.5 animate-spin" />Live · the listener is following your playback</div>}
 
               {!appleIsSyncing
