@@ -336,9 +336,13 @@ export default function MusicSync() {
         const sameTrack = currentId === songId;
 
         if (sameTrack) {
-          // Same track already loaded — just seek to correct position, no queue reload
+          // Same track — only seek if actually drifted, never seek just because of a routine resync
           const seekTarget = Math.max(0, (positionMs + Math.max(0, Date.now() - startAt)) / 1000);
-          try { await kit.seekToTime(seekTarget); } catch { /* ignore */ }
+          const currentSec = kit.currentPlaybackTime ?? 0;
+          const driftSec = Math.abs(currentSec - seekTarget);
+          if (driftSec > 2.5) {
+            try { await kit.seekToTime(seekTarget); } catch { /* ignore */ }
+          }
           if (kit.playbackState !== PlaybackState.playing) await kit.play();
           setApplePlaying(true);
         } else {
@@ -633,7 +637,8 @@ export default function MusicSync() {
           setSpotifyPlaying(true);
           execSpotifyPlay(msg.trackUri, msg.positionMs, msg.startAt);
         } else if (svc === "apple") {
-          // Cross-service: Spotify room, Apple listener → search Apple Music for matching track
+          // Cross-service: Spotify room, Apple listener — store sync point for drift loop
+          lastSyncPointRef.current = { positionMs: msg.positionMs, startAt: msg.startAt };
           setAppleNowPlaying({ id: "", name: msg.trackName, artist: msg.artistName, albumArt: msg.albumArt });
           execApplePlayByName(msg.trackName, msg.artistName, msg.positionMs, msg.startAt);
         }
@@ -821,17 +826,25 @@ export default function MusicSync() {
     }
   }, [phase]);
 
-  // Visibility change re-sync
+  // Visibility change re-sync: when returning to foreground, immediately reconnect if WS dropped,
+  // then request sync — this minimises the "come back to app" lag on iOS
   useEffect(() => {
     const handle = () => {
       if (document.visibilityState !== "visible") return;
+      const ws = wsRef.current;
+      const closed = !ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING;
+      if (closed && (myPhaseRef.current === "hosting" || myPhaseRef.current === "joined")) {
+        // Reconnect first — onopen will re-join the room and request sync automatically
+        connectWs();
+        return;
+      }
       if (isSyncingRef.current && myPhaseRef.current === "hosting") pollAndSync();
       else if (appleIsSyncingRef.current && myPhaseRef.current === "hosting") applePollAndSync();
       else if (myPhaseRef.current === "joined") send({ type: "request-sync" });
     };
     document.addEventListener("visibilitychange", handle);
     return () => document.removeEventListener("visibilitychange", handle);
-  }, [pollAndSync, applePollAndSync, send]);
+  }, [connectWs, pollAndSync, applePollAndSync, send]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -951,6 +964,22 @@ export default function MusicSync() {
     const pending = pendingApplePlayRef.current;
     if (pending) { pendingApplePlayRef.current = null; await execApplePlay(pending.songId, pending.positionMs, pending.startAt); }
     else send({ type: "request-sync" });
+
+    // Apple-side drift correction: check kit.currentPlaybackTime vs expected every DRIFT_CHECK_MS
+    // Only seek when genuinely drifted — avoids choppy micro-seeks from resyncs
+    if (driftIntervalRef.current) clearInterval(driftIntervalRef.current);
+    driftIntervalRef.current = setInterval(async () => {
+      const kitInst = appleKitRef.current;
+      const pt = lastSyncPointRef.current;
+      if (!kitInst || !pt || isLoadingTrackRef.current) return;
+      if (kitInst.playbackState !== PlaybackState.playing) return;
+      const expectedSec = (pt.positionMs + (Date.now() - pt.startAt)) / 1000;
+      const actualSec = kitInst.currentPlaybackTime ?? 0;
+      const driftSec = Math.abs(actualSec - expectedSec);
+      if (driftSec > 2.5) {
+        try { await kitInst.seekToTime(Math.max(0, expectedSec)); } catch { /* ignore */ }
+      }
+    }, DRIFT_CHECK_MS);
   };
 
 
