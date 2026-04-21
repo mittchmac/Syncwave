@@ -743,11 +743,11 @@ export default function MusicSync() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, roomMode, appleAuthorized]);
 
-  // Show fallback search after 8 s of no native detection; hide it as soon as a song is detected
+  // Show fallback search after 2 s of no native detection; hide once a song is detected
   useEffect(() => {
     if (appleFallbackTimerRef.current) clearTimeout(appleFallbackTimerRef.current);
     if (appleNoPlayback && phase === "hosting" && roomMode === "apple") {
-      appleFallbackTimerRef.current = setTimeout(() => setShowAppleFallback(true), 8000);
+      appleFallbackTimerRef.current = setTimeout(() => setShowAppleFallback(true), 2000);
     } else {
       setShowAppleFallback(false);
       setAppleFallbackQuery("");
@@ -924,16 +924,17 @@ export default function MusicSync() {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const startAt = Date.now() + SYNC_LEAD_MS;
-    const positionMs = SYNC_LEAD_MS; // starts from near 0
-    const artworkUrl = getArtworkUrl(song, 60);
-    const info: TrackInfo = { id: song.id, name: song.attributes.name, artist: song.attributes.artistName, albumArt: getArtworkUrl(song, 300) };
+    const positionMs = SYNC_LEAD_MS; // start from near beginning
+    const albumArt = getArtworkUrl(song, 300);
+    const info: TrackInfo = { id: song.id, name: song.attributes.name, artist: song.attributes.artistName, albumArt };
     setAppleNowPlaying(info);
     setAppleNoPlayback(false);
     setShowAppleFallback(false);
     setAppleFallbackQuery("");
     setAppleFallbackResults([]);
     appleLastSongIdRef.current = song.id;
-    const msg = JSON.stringify({ type: "apple-play", songId: song.id, songName: song.attributes.name, artistName: song.attributes.artistName, artworkUrl, positionMs, startAt });
+    // "albumArt" must match what the server's WsMessage type expects
+    const msg = JSON.stringify({ type: "apple-play", songId: song.id, songName: song.attributes.name, artistName: song.attributes.artistName, albumArt, positionMs, startAt });
     ws.send(msg);
   };
 
@@ -1198,50 +1199,51 @@ export default function MusicSync() {
               <h3 className="text-sm font-semibold flex items-center gap-2"><AppleLogo size={4} className="fill-pink-400" /> Apple Music Auto-Sync</h3>
               {/* Waiting-for-playback state */}
               {appleNoPlayback && (
-                <div className="bg-secondary/50 rounded-2xl p-5 flex flex-col items-center gap-3 text-center">
-                  <div className="w-12 h-12 rounded-full bg-pink-500/10 flex items-center justify-center">
-                    <AppleLogo size={6} className="fill-pink-400" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold">Open Apple Music &amp; play anything</p>
-                    <p className="text-xs text-muted-foreground mt-1">SyncWave will detect it and sync to the listener automatically</p>
-                  </div>
-                  <div className="flex items-center gap-1.5 text-xs text-pink-400">
-                    <div className="w-1.5 h-1.5 rounded-full bg-pink-400 animate-pulse" />
-                    Listening for playback…
+                <div className="bg-secondary/50 rounded-2xl p-5 flex flex-col gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-pink-500/10 flex items-center justify-center flex-shrink-0">
+                      <AppleLogo size={5} className="fill-pink-400" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold">What are you playing?</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Search the song you have open in Apple Music</p>
+                    </div>
                   </div>
 
-                  {/* Fallback: shown after 8 s if native detection hasn't fired */}
-                  {showAppleFallback && (
-                    <div className="w-full border-t border-white/10 pt-3 mt-1 text-left">
-                      <p className="text-xs text-muted-foreground mb-2 text-center">Can't detect it automatically? Tell SyncWave what's playing:</p>
-                      <input
-                        type="text"
-                        value={appleFallbackQuery}
-                        onChange={e => handleAppleFallbackSearch(e.target.value)}
-                        placeholder="Search song name…"
-                        className="w-full bg-secondary border border-white/10 rounded-xl px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-pink-500/60"
-                      />
-                      {appleFallbackLoading && <p className="text-xs text-muted-foreground text-center mt-2">Searching…</p>}
-                      {!appleFallbackLoading && appleFallbackResults.length > 0 && (
-                        <div className="mt-2 space-y-1">
-                          {appleFallbackResults.map(song => (
-                            <button
-                              key={song.id}
-                              onClick={() => handleAppleFallbackPick(song)}
-                              className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pink-500/10 active:scale-[0.97] transition-all text-left"
-                            >
-                              {song.attributes.artwork?.url && <img src={getArtworkUrl(song, 60)} className="w-8 h-8 rounded-lg flex-shrink-0" />}
-                              <div className="min-w-0">
-                                <p className="text-xs font-semibold truncate">{song.attributes.name}</p>
-                                <p className="text-xs text-muted-foreground truncate">{song.attributes.artistName}</p>
-                              </div>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  {/* Always show search — native detection is a silent bonus */}
+                  <div>
+                    <input
+                      type="text"
+                      value={appleFallbackQuery}
+                      onChange={e => handleAppleFallbackSearch(e.target.value)}
+                      placeholder="Search song name…"
+                      className="w-full bg-secondary border border-white/10 rounded-xl px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-pink-500/60"
+                    />
+                    {appleFallbackLoading && <p className="text-xs text-muted-foreground text-center mt-2">Searching…</p>}
+                    {!appleFallbackLoading && appleFallbackResults.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {appleFallbackResults.map(song => (
+                          <button
+                            key={song.id}
+                            onClick={() => handleAppleFallbackPick(song)}
+                            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pink-500/10 active:scale-[0.97] transition-all text-left"
+                          >
+                            {song.attributes.artwork?.url && <img src={getArtworkUrl(song, 60)} className="w-8 h-8 rounded-lg flex-shrink-0" />}
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold truncate">{song.attributes.name}</p>
+                              <p className="text-xs text-muted-foreground truncate">{song.attributes.artistName}</p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {!appleFallbackLoading && !appleFallbackResults.length && !appleFallbackQuery && (
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-2 justify-center">
+                        <div className="w-1.5 h-1.5 rounded-full bg-pink-400 animate-pulse" />
+                        Also watching for automatic detection…
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
