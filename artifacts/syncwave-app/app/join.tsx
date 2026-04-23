@@ -95,6 +95,10 @@ export default function JoinScreen() {
   }, [codeInput, joinRoom]);
 
   const onScanPress = useCallback(async () => {
+    if (Platform.OS === "web") {
+      Alert.alert("QR Scanning", "QR code scanning requires the native app on your phone. Enter the code manually above.");
+      return;
+    }
     if (!cameraPermission?.granted) {
       const result = await requestCameraPermission();
       if (!result.granted) return;
