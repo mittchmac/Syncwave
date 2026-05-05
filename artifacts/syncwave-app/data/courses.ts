@@ -1,4 +1,5 @@
 import { GolfCourse } from "@/context/GolfContext";
+import { getCachedCourse } from "@/lib/courseCache";
 
 export const FEATURED_COURSES: GolfCourse[] = [
   {
@@ -144,7 +145,7 @@ export function searchCourses(query: string): GolfCourse[] {
 }
 
 export function getCourseById(id: string): GolfCourse | undefined {
-  return FEATURED_COURSES.find((c) => c.id === id);
+  return FEATURED_COURSES.find((c) => c.id === id) ?? getCachedCourse(id);
 }
 
 export function getScoreLabel(strokes: number, par: number): string {
