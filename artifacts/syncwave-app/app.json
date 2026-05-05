@@ -16,11 +16,17 @@
     "ios": {
       "supportsTablet": false,
       "infoPlist": {
-        "UIBackgroundModes": ["audio"]
+        "UIBackgroundModes": ["audio"],
+        "NSLocationWhenInUseUsageDescription": "FairwayCaddie uses your location to show distance to the pin and track your position on the course.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "FairwayCaddie uses your location in the background to keep GPS distance updated while your screen is locked."
       }
     },
     "android": {
-      "useNextNotificationsApi": true
+      "useNextNotificationsApi": true,
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ]
     },
     "web": {
       "favicon": "./assets/images/icon.png"
@@ -44,6 +50,13 @@
         "expo-audio",
         {
           "microphonePermission": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "FairwayCaddie uses your location to show distance to the pin and track your position on the course.",
+          "locationWhenInUsePermission": "FairwayCaddie uses your location to show distance to the pin."
         }
       ]
     ],

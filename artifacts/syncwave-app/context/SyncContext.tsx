@@ -31,6 +31,7 @@ interface SyncContextValue {
   hostDisconnected: boolean;
   lastSpotifyPlay: SpotifyPlayEvent | null;
   lastRadioPlay: RadioPlayEvent | null;
+  lastMessage: Record<string, unknown> | null;
   createRoom: (mode: RoomMode) => void;
   joinRoom: (code: string) => void;
   leaveRoom: () => void;
@@ -39,6 +40,7 @@ interface SyncContextValue {
   sendRadioPlay: (streamUrl: string, stationName: string, favicon: string) => void;
   sendRadioStop: () => void;
   requestSync: () => void;
+  sendMessage: (data: object) => void;
 }
 
 const SyncContext = createContext<SyncContextValue | null>(null);
@@ -52,6 +54,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   const [hostDisconnected, setHostDisconnected] = useState(false);
   const [lastSpotifyPlay, setLastSpotifyPlay] = useState<SpotifyPlayEvent | null>(null);
   const [lastRadioPlay, setLastRadioPlay] = useState<RadioPlayEvent | null>(null);
+  const [lastMessage, setLastMessage] = useState<Record<string, unknown> | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const phaseRef = useRef<Phase>("idle");
@@ -71,6 +74,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
 
   const handleMessageRef = useRef<(msg: Record<string, unknown>) => void>(() => {});
   handleMessageRef.current = (msg: Record<string, unknown>) => {
+    setLastMessage(msg);
     switch (msg.type) {
       case "room-created":
         setRoomCode(msg.code as string);
@@ -232,15 +236,16 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     send({ type: "radio-play", streamUrl, stationName, favicon }), [send]);
   const sendRadioStop = useCallback(() => send({ type: "radio-stop" }), [send]);
   const requestSync = useCallback(() => send({ type: "request-sync" }), [send]);
+  const sendMessage = useCallback((data: object) => send(data), [send]);
 
   return (
     <SyncContext.Provider value={{
       phase, connStatus, roomCode, roomMode, listenerCount, hostDisconnected,
-      lastSpotifyPlay, lastRadioPlay,
+      lastSpotifyPlay, lastRadioPlay, lastMessage,
       createRoom, joinRoom, leaveRoom,
       sendSpotifyPlay, sendSpotifyPause,
       sendRadioPlay, sendRadioStop,
-      requestSync,
+      requestSync, sendMessage,
     }}>
       {children}
     </SyncContext.Provider>

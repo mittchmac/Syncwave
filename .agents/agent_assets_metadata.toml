@@ -6,3 +6,15 @@ id = "tMmD7QrAsm0EjkeWU9nip"
 uri = "file://attached_assets/syncwave-icon.png"
 type = "image"
 title = "syncwave app icon"
+
+[[generated]]
+id = "0c8psxUzomRtXmS1N5B48"
+uri = "file://artifacts/fairway-caddie/assets/images/icon.png"
+type = "image"
+title = "generated_image"
+
+[[generated]]
+id = "ms-ru6FSnLBIsGOiukAv_"
+uri = "file://artifacts/fairway-caddie/assets/images/splash.png"
+type = "image"
+title = "generated_image"

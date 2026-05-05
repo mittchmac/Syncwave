@@ -16,6 +16,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SyncProvider } from "@/context/SyncContext";
 import { SpotifyProvider } from "@/context/SpotifyContext";
 import { AudioProvider } from "@/context/AudioContext";
+import { GolfProvider } from "@/context/GolfContext";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -24,9 +25,12 @@ const queryClient = new QueryClient();
 function RootLayoutNav() {
   return (
     <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="index" />
+      <Stack.Screen name="(tabs)" />
       <Stack.Screen name="host" />
       <Stack.Screen name="join" />
+      <Stack.Screen name="golf/setup" />
+      <Stack.Screen name="golf/round" />
+      <Stack.Screen name="golf/scorecard" />
     </Stack>
   );
 }
@@ -55,7 +59,9 @@ export default function RootLayout() {
             <SyncProvider>
               <SpotifyProvider>
                 <AudioProvider>
-                  <RootLayoutNav />
+                  <GolfProvider>
+                    <RootLayoutNav />
+                  </GolfProvider>
                 </AudioProvider>
               </SpotifyProvider>
             </SyncProvider>
