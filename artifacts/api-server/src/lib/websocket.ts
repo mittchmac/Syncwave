@@ -16,6 +16,8 @@ type WsMessage =
   | { type: "rejoin-room"; code: string }
   | { type: "ping" }
   | { type: "request-sync" }
+  | { type: "gps-beacon"; lat: number; lng: number }
+  | { type: "sync-ping"; sentAt: number; streamAgeMs: number }
   | {
       type: "spotify-play";
       trackUri: string; trackName: string; artistName: string;
@@ -172,6 +174,36 @@ export function setupWebSocket(server: Server) {
             albumArt: room.lastApplePlay.albumArt,
             positionMs: room.lastApplePlay.positionMs + elapsed,
             startAt: Date.now() + 500,
+          });
+        }
+        return;
+      }
+
+      // ── GPS beacon — both roles can send; relay to the other side ──────────
+
+      if (msg.type === "gps-beacon") {
+        const room = myRoomCode ? getRoom(myRoomCode) : null;
+        if (!room) return;
+        if (myRole === "host" && room.client) {
+          send(room.client, { type: "host-gps", lat: msg.lat, lng: msg.lng });
+        } else if (myRole === "client" && room.host) {
+          send(room.host, { type: "client-gps", lat: msg.lat, lng: msg.lng });
+        }
+        return;
+      }
+
+      // ── Sync ping — host only; relay to client ─────────────────────────────
+
+      if (msg.type === "sync-ping") {
+        if (!myRoomCode || myRole !== "host") return;
+        const room = getRoom(myRoomCode);
+        if (!room) return;
+        if (room.client) {
+          send(room.client, {
+            type: "sync-ping",
+            sentAt: msg.sentAt,
+            streamAgeMs: msg.streamAgeMs,
+            relayedAt: Date.now(),
           });
         }
         return;

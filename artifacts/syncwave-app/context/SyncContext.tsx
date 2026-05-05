@@ -22,6 +22,18 @@ export interface RadioPlayEvent {
   favicon: string;
 }
 
+export interface GpsPosition {
+  lat: number;
+  lng: number;
+}
+
+export interface SyncPingEvent {
+  sentAt: number;
+  streamAgeMs: number;
+  relayedAt: number;
+  receivedAt: number;
+}
+
 interface SyncContextValue {
   phase: Phase;
   connStatus: ConnStatus;
@@ -32,6 +44,8 @@ interface SyncContextValue {
   lastSpotifyPlay: SpotifyPlayEvent | null;
   lastRadioPlay: RadioPlayEvent | null;
   lastMessage: Record<string, unknown> | null;
+  hostGps: GpsPosition | null;
+  lastSyncPing: SyncPingEvent | null;
   createRoom: (mode: RoomMode) => void;
   joinRoom: (code: string) => void;
   leaveRoom: () => void;
@@ -41,6 +55,7 @@ interface SyncContextValue {
   sendRadioStop: () => void;
   requestSync: () => void;
   sendMessage: (data: object) => void;
+  broadcastGps: (lat: number, lng: number) => void;
 }
 
 const SyncContext = createContext<SyncContextValue | null>(null);
@@ -55,6 +70,8 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   const [lastSpotifyPlay, setLastSpotifyPlay] = useState<SpotifyPlayEvent | null>(null);
   const [lastRadioPlay, setLastRadioPlay] = useState<RadioPlayEvent | null>(null);
   const [lastMessage, setLastMessage] = useState<Record<string, unknown> | null>(null);
+  const [hostGps, setHostGps] = useState<GpsPosition | null>(null);
+  const [lastSyncPing, setLastSyncPing] = useState<SyncPingEvent | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const phaseRef = useRef<Phase>("idle");
@@ -129,6 +146,17 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
         break;
       case "radio-stop":
         setLastRadioPlay(null);
+        break;
+      case "host-gps":
+        setHostGps({ lat: msg.lat as number, lng: msg.lng as number });
+        break;
+      case "sync-ping":
+        setLastSyncPing({
+          sentAt: msg.sentAt as number,
+          streamAgeMs: msg.streamAgeMs as number,
+          relayedAt: msg.relayedAt as number,
+          receivedAt: Date.now(),
+        });
         break;
       default:
         break;
@@ -237,15 +265,18 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   const sendRadioStop = useCallback(() => send({ type: "radio-stop" }), [send]);
   const requestSync = useCallback(() => send({ type: "request-sync" }), [send]);
   const sendMessage = useCallback((data: object) => send(data), [send]);
+  const broadcastGps = useCallback((lat: number, lng: number) =>
+    send({ type: "gps-beacon", lat, lng }), [send]);
 
   return (
     <SyncContext.Provider value={{
       phase, connStatus, roomCode, roomMode, listenerCount, hostDisconnected,
       lastSpotifyPlay, lastRadioPlay, lastMessage,
+      hostGps, lastSyncPing,
       createRoom, joinRoom, leaveRoom,
       sendSpotifyPlay, sendSpotifyPause,
       sendRadioPlay, sendRadioStop,
-      requestSync, sendMessage,
+      requestSync, sendMessage, broadcastGps,
     }}>
       {children}
     </SyncContext.Provider>

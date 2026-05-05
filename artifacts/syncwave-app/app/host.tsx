@@ -2,6 +2,7 @@ import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
+import * as Location from "expo-location";
 import { router } from "expo-router";
 import QRCode from "react-native-qrcode-svg";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -16,6 +17,8 @@ import { useSpotify } from "@/context/SpotifyContext";
 import { getTopUSStations, searchStations, RadioStation, FEATURED_GENRES } from "@/lib/radioBrowser";
 import { getCurrentPlayback } from "@/lib/spotifyApi";
 
+const GPS_BROADCAST_MS = 8000;
+
 const SYNC_LEAD_MS = 800;
 const POLL_MS = 1000;
 
@@ -24,7 +27,7 @@ type HostStep = "mode" | "radio-pick" | "spotify-setup" | "active";
 export default function HostScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { phase, roomCode, roomMode, listenerCount, createRoom, leaveRoom, sendSpotifyPlay, sendSpotifyPause, sendRadioPlay, sendRadioStop } = useSync();
+  const { phase, roomCode, roomMode, listenerCount, createRoom, leaveRoom, sendSpotifyPlay, sendSpotifyPause, sendRadioPlay, sendRadioStop, broadcastGps, sendMessage } = useSync();
   const { spotifyToken, isAuthing, authError, redirectUri, login } = useSpotify();
 
   const [step, setStep] = useState<HostStep>("mode");
@@ -38,7 +41,9 @@ export default function HostScreen() {
   const [showRedirectHelp, setShowRedirectHelp] = useState(false);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const gpsRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastTrackUriRef = useRef<string | null>(null);
+  const radioStreamStartedAtRef = useRef<number | null>(null);
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
 
@@ -78,9 +83,13 @@ export default function HostScreen() {
     pollRef.current = setInterval(() => {
       if (selectedStation) {
         sendRadioPlay(selectedStation.url_resolved, selectedStation.name, selectedStation.favicon);
+        const streamAgeMs = radioStreamStartedAtRef.current
+          ? Date.now() - radioStreamStartedAtRef.current
+          : 0;
+        sendMessage({ type: "sync-ping", sentAt: Date.now(), streamAgeMs });
       }
-    }, 30_000);
-  }, [selectedStation, sendRadioPlay]);
+    }, 10_000);
+  }, [selectedStation, sendRadioPlay, sendMessage]);
 
   const startSpotifyPoll = useCallback(() => {
     if (!spotifyToken) return;
@@ -112,6 +121,32 @@ export default function HostScreen() {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [step, roomMode, selectedStation, spotifyToken, startRadioPoll, startSpotifyPoll]);
 
+  // GPS broadcasting for radio mode
+  useEffect(() => {
+    if (step !== "active" || roomMode !== "radio") return;
+    let cancelled = false;
+
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (cancelled || status !== "granted") return;
+
+      const broadcastNow = async () => {
+        try {
+          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          if (!cancelled) broadcastGps(loc.coords.latitude, loc.coords.longitude);
+        } catch {}
+      };
+
+      broadcastNow();
+      gpsRef.current = setInterval(broadcastNow, GPS_BROADCAST_MS);
+    })();
+
+    return () => {
+      cancelled = true;
+      if (gpsRef.current) { clearInterval(gpsRef.current); gpsRef.current = null; }
+    };
+  }, [step, roomMode, broadcastGps]);
+
   const onPickRadio = useCallback(() => {
     setStep("radio-pick");
     loadFeatured();
@@ -125,6 +160,7 @@ export default function HostScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setSelectedStation(station);
     setNowPlayingName(station.name);
+    radioStreamStartedAtRef.current = Date.now();
     createRoom("radio");
     sendRadioPlay(station.url_resolved, station.name, station.favicon);
   }, [createRoom, sendRadioPlay]);

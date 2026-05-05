@@ -14,6 +14,7 @@ import { useSync } from "@/context/SyncContext";
 import { useSpotify } from "@/context/SpotifyContext";
 import { useAudio } from "@/context/AudioContext";
 import { getCurrentPlayback, playTrack, seekTo } from "@/lib/spotifyApi";
+import { useGpsAudioSync } from "@/hooks/useGpsAudioSync";
 
 const DRIFT_CHECK_MS = 6000;
 const DRIFT_THRESHOLD_MS = 2000;
@@ -37,13 +38,27 @@ export default function JoinScreen() {
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
 
+  const gpsSync = useGpsAudioSync(phase === "joined" && roomMode === "radio");
+
   useEffect(() => {
     if (phase === "joined") setJoining(false);
   }, [phase]);
 
+  const soundOffsetRef = useRef(0);
+  useEffect(() => {
+    soundOffsetRef.current = gpsSync.soundOffsetMs ?? 0;
+  }, [gpsSync.soundOffsetMs]);
+
   useEffect(() => {
     if (phase !== "joined" || roomMode !== "radio") return;
     if (lastRadioPlay) {
+      const delayMs = soundOffsetRef.current;
+      if (delayMs > 0) {
+        const t = setTimeout(() => {
+          playStream(lastRadioPlay.streamUrl, lastRadioPlay.stationName).catch(() => {});
+        }, delayMs);
+        return () => clearTimeout(t);
+      }
       playStream(lastRadioPlay.streamUrl, lastRadioPlay.stationName).catch(() => {});
     } else {
       stopStream();
@@ -177,9 +192,29 @@ export default function JoinScreen() {
                   <View style={[styles.syncRow, { backgroundColor: colors.card, borderRadius: 20 }]}>
                     <View style={[styles.syncDot, { backgroundColor: isPlaying ? colors.primary : colors.mutedForeground }]} />
                     <Text style={[styles.syncText, { color: isPlaying ? colors.primary : colors.mutedForeground }]}>
-                      {isPlaying ? "Synced" : "Connecting…"}
+                      {isPlaying
+                        ? gpsSync.rateAdjust !== 1.0
+                          ? `Syncing… (${gpsSync.rateAdjust > 1 ? "+" : ""}${((gpsSync.rateAdjust - 1) * 100).toFixed(0)}%)`
+                          : "Synced"
+                        : "Connecting…"}
                     </Text>
                   </View>
+                  {gpsSync.distanceM !== null && gpsSync.soundOffsetMs !== null ? (
+                    <View style={[styles.gpsBadge, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                      <Feather name="map-pin" size={12} color={colors.primary} />
+                      <Text style={[styles.gpsBadgeText, { color: colors.mutedForeground }]}>
+                        {gpsSync.distanceM < 1000
+                          ? `${Math.round(gpsSync.distanceM)}m away`
+                          : `${(gpsSync.distanceM / 1000).toFixed(1)}km away`}
+                        {gpsSync.soundOffsetMs > 0 ? ` · ${gpsSync.soundOffsetMs}ms offset` : " · no offset needed"}
+                      </Text>
+                    </View>
+                  ) : gpsSync.gpsStatus === "acquiring" ? (
+                    <View style={[styles.gpsBadge, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                      <ActivityIndicator size="small" color={colors.primary} style={{ transform: [{ scale: 0.7 }] }} />
+                      <Text style={[styles.gpsBadgeText, { color: colors.mutedForeground }]}>Acquiring GPS…</Text>
+                    </View>
+                  ) : null}
                   <Text style={[styles.bgNote, { color: colors.mutedForeground }]}>
                     Audio continues when you switch apps
                   </Text>
@@ -376,4 +411,6 @@ const styles = StyleSheet.create({
   uriBox: { padding: 10 },
   uriText: { fontSize: 12, fontFamily: "Inter_500Medium" },
   errorText: { fontSize: 14, fontFamily: "Inter_400Regular", textAlign: "center" },
+  gpsBadge: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: StyleSheet.hairlineWidth },
+  gpsBadgeText: { fontSize: 12, fontFamily: "Inter_400Regular" },
 });
