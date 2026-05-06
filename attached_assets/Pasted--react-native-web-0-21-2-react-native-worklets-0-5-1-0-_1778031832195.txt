@@ -1,0 +1,107 @@
++ react-native-web 0.21.2
++ react-native-worklets 0.5.1 (0.8.3 is available)
++ typescript 5.9.3 (6.0.3 is available)
++ zod 3.25.76 (4.4.3 is available)
++ zod-validation-error 3.5.4 (5.0.0 is available)
+
+Done in 15.7s using pnpm v10.33.3
+mitchmcafee@Mitchs-MacBook-Aiir-2 syncwave-app % >....                                                                  
++ expo-image 3.0.11 (55.0.10 is available)
++ expo-image-picker 17.0.11 (55.0.20 is available)
++ expo-linear-gradient 15.0.8 (55.0.13 is available)
++ expo-linking 8.0.12 (55.0.15 is available)
++ expo-location 19.0.8 (55.1.9 is available)
++ expo-router 6.0.23 (55.0.14 is available)
++ expo-splash-screen 31.0.13 (55.0.20 is available)
++ expo-status-bar 3.0.9 (55.0.6 is available)
++ expo-symbols 1.0.8 (55.0.8 is available)
++ expo-system-ui 6.0.9 (55.0.17 is available)
++ expo-web-browser 15.0.11 (55.0.15 is available)
++ react 19.1.0 (19.2.5 is available)
++ react-dom 19.1.0 (19.2.5 is available)
++ react-native 0.81.5 (0.85.3 is available)
++ react-native-gesture-handler 2.28.0 (2.31.2 is available)
++ react-native-keyboard-controller 1.18.5 (1.21.7 is available)
++ react-native-reanimated 4.1.7 (4.3.0 is available)
++ react-native-safe-area-context 5.6.2 (5.7.0 is available)
++ react-native-screens 4.16.0 (4.24.0 is available)
++ react-native-svg 15.12.1 (15.15.4 is available)
++ react-native-web 0.21.2
++ react-native-worklets 0.5.1 (0.8.3 is available)
++ typescript 5.9.3 (6.0.3 is available)
++ zod 3.25.76 (4.4.3 is available)
++ zod-validation-error 3.5.4 (5.0.0 is available)
+
+Done in 15.7s using pnpm v10.33.3
+mitchmcafee@Mitchs-MacBook-Aiir-2 syncwave-app %
+
+zsh: command not found: 1
+zsh: command not found: run
+zsh: command not found: mitchmcafee@Mitchs-MacBook-Aiir-2
+zsh: command not found:  ERR_PNPM_CATALOG_ENTRY_NOT_FOUND_FOR_SPEC 
+zsh: command not found: mitchmcafee@Mitchs-MacBook-Aiir-2
+zsh: command not found: mitchmcafee@Mitchs-MacBook-Aiir-2
+zsh: command not found: unzip:
+zsh: command not found: mitchmcafee@Mitchs-MacBook-Aiir-2
+zsh: command not found: unzip:
+zsh: command not found: mitchmcafee@Mitchs-MacBook-Aiir-2
+zsh: command not found: mitchmcafee@Mitchs-MacBook-Aiir-2
+zsh: command not found: Downloading
+zsh: command not found: Downloading
+zsh: command not found:  WARN 
+zsh: command not found: Packages:
+zsh: command not found: ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+zsh: command not found: Progress:
+zsh: command not found: dependencies:
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: command not found: +
+zsh: command not found: devDependencies:
+zsh: command not found: +
+zsh: command not found: +
+zsh: unknown file attribute: 5
+zsh: command not found: +
+zsh: command not found: +
+zsh: unknown file attribute: 3
+zsh: command not found: +
+zsh: command not found: +
+zsh: unknown file attribute: 1
+zsh: unknown file attribute: 1
+zsh: command not found: +
+zsh: command not found: +
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 1
+zsh: unknown file attribute: 1
+zsh: unknown file attribute: 0
+zsh: unknown file attribute: 2
+zsh: unknown file attribute: 1
+zsh: unknown file attribute: 4
+zsh: unknown file attribute: 5
+zsh: unknown file attribute: 4
+zsh: unknown file attribute: 1
+zsh: command not found: +
+zsh: unknown file attribute: 0
+zsh: unknown file attribute: 6
+zsh: unknown file attribute: 4
+zsh: unknown file attribute: 5
+zsh: command not found: Done
+zsh: command not found: mitchmcafee@Mitchs-MacBook-Aiir-2
+mitchmcafee@Mitchs-MacBook-Aiir-2 syncwave-app % 
