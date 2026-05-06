@@ -1,0 +1,22 @@
+   Error: build command failed.
+mitchmcafee@Mitchs-MacBook-Aiir-2 syncwave-app % EAS_NO_VCS=1 eas build --platform ios --profile production
+(node:80491) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Using EAS CLI without version control system is not recommended, use this mode only if you know what you are doing.
+Failed to get Git root path with `git rev-parse --show-toplevel`. Error: git rev-parse --show-toplevel exited with non-zero code: 1
+Falling back to using current working directory as project root.
+You can set `EAS_PROJECT_ROOT` environment variable to let eas-cli know where your project is located.
+
+⚠️ Detected that your app uses Expo Go for development, this is not recommended when building production apps.
+Learn more: https://expo.fyi/why-not-build-expo-go-for-production
+To suppress this warning, set EAS_BUILD_NO_EXPO_GO_WARNING=true.
+
+Since EAS CLI version `12.0.0` explicitly specifying app version source is required. Please select your app version source:
+	1) With the "local" app version source and "autoIncrement" option enabled, the build number/version code is sourced from local project files and incremented automatically if possible, by editing local project files. Learn more: https://docs.expo.dev/build-reference/app-versions/#local-version-source
+	2) With the "remote" app version source and "autoIncrement" option enabled, the build number/version code is stored on EAS servers and updated every time you create a new build. Remote auto-incrementation won't edit the version in the local project files, but instead, the new version will be injected automatically during the build process. Learn more: https://docs.expo.dev/build-reference/app-versions/#remote-version-source
+Until now, this project has been using the "local" version source (which was the previous default). App version source can now be set for you automatically, or you can configure it manually by setting the "appVersionSource" value in your eas.json.
+? What would you like to do? › - Use arrow-keys. Return to submit.
+❯   Update eas.json to use the default "remote" version source (recommended)
+    Update eas.json to use "local" version source (old behavior)
+    Don't update eas.json, abort command and configure manually
+
