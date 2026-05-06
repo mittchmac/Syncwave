@@ -16,11 +16,11 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.syncwave.app",
-      "buildNumber": "1",
+      "buildNumber": "2",
       "infoPlist": {
         "UIBackgroundModes": ["audio"],
-        "NSLocationWhenInUseUsageDescription": "FairwayCaddie uses your location to show distance to the pin and track your position on the course.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "FairwayCaddie uses your location in the background to keep GPS distance updated while your screen is locked."
+        "NSLocationWhenInUseUsageDescription": "FairwayCaddie uses your GPS location to find nearby golf courses and calculate real-time yardage to each hole's pin while you play. For example, when you stand on the fairway, the app displays your exact distance to the green so you can choose the right club.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "FairwayCaddie uses your GPS location in the background to continuously update yardage to the pin while your screen is off. For example, if you lock your phone while walking between shots, the app keeps tracking your position so distances are accurate when you check again."
       }
     },
     "android": {
@@ -57,8 +57,8 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "FairwayCaddie uses your location to show distance to the pin and track your position on the course.",
-          "locationWhenInUsePermission": "FairwayCaddie uses your location to show distance to the pin."
+          "locationAlwaysAndWhenInUsePermission": "FairwayCaddie uses your GPS location in the background to continuously update yardage to the pin while your screen is off. For example, if you lock your phone while walking between shots, the app keeps tracking your position so distances are accurate when you check again.",
+          "locationWhenInUsePermission": "FairwayCaddie uses your GPS location to find nearby golf courses and calculate real-time yardage to each hole's pin while you play. For example, when you stand on the fairway, the app displays your exact distance to the green so you can choose the right club."
         }
       ]
     ],

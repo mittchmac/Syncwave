@@ -1,0 +1,57 @@
+Hello, 
+
+We noticed this is your first app submission and want to congratulate you on joining the Apple Developer Program. We look forward to working together on your submissions.
+
+When App Review identifies an issue with a submission, we’ll contact you with a message in App Store Connect with details about what we found and how to resolve the issue. Learn more about App Review and tips for a smooth review experience. 
+
+See below for additional information about the issues that require your attention for this submission. If you have any questions, we are here to help. Reply to this message in App Store Connect and let us know.
+
+Review Environment
+
+Submission ID: 7d1f1a8e-0231-4024-b53f-6f08d375ac5c
+Review date: May 06, 2026
+Review Device: iPad Air 11-inch (M3)
+Version reviewed: 1.0 (2)
+
+Guideline 5.1.1(ii) - Legal - Privacy - Data Collection and Storage
+
+Issue Description
+
+One or more purpose strings in the app do not sufficiently explain the use of protected resources. Purpose strings must clearly and completely describe the app's use of data and, in most cases, provide an example of how the data will be used.
+
+Next Steps
+
+Update the location purpose string to explain how the app will use the requested information and provide a specific example of how the data will be used. See the attached screenshot.
+
+Resources
+
+Purpose strings must clearly describe how an app uses the ability, data, or resource. The following are hypothetical examples of unclear purpose strings that would not pass review: 
+
+- "App would like to access your Contacts"
+- "App needs microphone access"
+
+See examples of helpful, informative purpose strings.
+Guideline 5.2.3 - Legal
+
+
+Issue Description
+
+The app contains content or features that may violate the rights of one or more third parties. Specifically, the app provides potentially unauthorized access to third-party audio or video streaming, catalogs, and discovery services. 
+
+The app and its contents should not infringe upon the rights of another party. In the event the app infringes another party’s rights, you are responsible for any liability to Apple because of a claim.
+
+Next Steps
+
+To resolve this issue, please attach documentary evidence in the App Review Information section in App Store Connect evidencing that you have all necessary rights or permissions to the third-party audio or video streaming, catalogs, and discovery services in the app. 
+
+Once we have reviewed your documentation and confirmed its validity, we will proceed with the review of the app.
+
+Resources
+
+- Review guideline 5.2.3 for more information about appropriate uses of third-party content and services on the App Store
+- Review App Store Connect Help for more information on including notes in the App Review Information section of App Store Connect
+Support
+
+- Reply to this message in your preferred language if you need assistance. If you need additional support, use the Contact Us module.
+- Consult with fellow developers and Apple engineers on the Apple Developer Forums.
+- Provide feedback on this message and your review experience by completing a short survey.
