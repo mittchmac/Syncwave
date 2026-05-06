@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>App Store Screenshots</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0a0a0a; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif; }
+
+    .slide {
+      width: 1290px;
+      height: 2796px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+      page-break-after: always;
+    }
+
+    /* Slide 1 — Home */
+    .slide-1 { background: linear-gradient(160deg, #060e18 0%, #0d2035 40%, #091c14 100%); }
+    /* Slide 2 — Host */
+    .slide-2 { background: linear-gradient(160deg, #060e18 0%, #0d2035 40%, #091c14 100%); }
+    /* Slide 3 — Golf */
+    .slide-3 { background: linear-gradient(160deg, #060e18 0%, #0a1f10 40%, #122b1a 100%); }
+
+    .glow {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(120px);
+      opacity: 0.35;
+      pointer-events: none;
+    }
+    .glow-green { background: #1db954; width: 700px; height: 700px; top: -100px; right: -100px; }
+    .glow-blue  { background: #0a4d8c; width: 600px; height: 600px; bottom: 100px; left: -100px; }
+    .glow-gold  { background: #f5c518; width: 500px; height: 500px; bottom: 200px; right: -50px; }
+
+    .headline {
+      font-size: 88px;
+      font-weight: 800;
+      color: #ffffff;
+      text-align: center;
+      line-height: 1.05;
+      letter-spacing: -2px;
+      padding: 0 80px;
+      margin-bottom: 24px;
+      position: relative;
+      z-index: 2;
+    }
+    .headline span { color: #1db954; }
+
+    .sub {
+      font-size: 44px;
+      font-weight: 400;
+      color: rgba(255,255,255,0.65);
+      text-align: center;
+      padding: 0 100px;
+      margin-bottom: 80px;
+      line-height: 1.4;
+      position: relative;
+      z-index: 2;
+    }
+
+    .phone-frame {
+      position: relative;
+      z-index: 2;
+      width: 700px;
+      border-radius: 72px;
+      overflow: hidden;
+      box-shadow:
+        0 0 0 8px #1a2a1a,
+        0 0 0 12px #0d1a0d,
+        0 60px 120px rgba(0,0,0,0.8),
+        0 0 80px rgba(29,185,84,0.15);
+    }
+    .phone-frame img { width: 100%; display: block; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 16px;
+      background: rgba(29,185,84,0.15);
+      border: 2px solid rgba(29,185,84,0.4);
+      border-radius: 60px;
+      padding: 20px 48px;
+      font-size: 38px;
+      font-weight: 600;
+      color: #1db954;
+      margin-top: 60px;
+      position: relative;
+      z-index: 2;
+      letter-spacing: 0.5px;
+    }
+
+    .logo-row {
+      position: absolute;
+      top: 80px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      z-index: 3;
+    }
+    .logo-icon {
+      width: 80px; height: 80px;
+      background: #1db954;
+      border-radius: 22px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 40px;
+    }
+    .logo-name {
+      font-size: 48px;
+      font-weight: 700;
+      color: rgba(255,255,255,0.9);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- SLIDE 1: Home / Sync -->
+  <div class="slide slide-1" id="slide1">
+    <div class="glow glow-green"></div>
+    <div class="glow glow-blue"></div>
+    <div class="logo-row">
+      <div class="logo-icon">🎵</div>
+      <div class="logo-name">SyncWave</div>
+    </div>
+    <p class="headline">Music in<br/><span>perfect sync</span></p>
+    <p class="sub">Everyone hears the same beat<br/>at the exact same moment</p>
+    <div class="phone-frame">
+      <img src="/home.jpg" alt="SyncWave home screen" />
+    </div>
+    <div class="badge">🎧 &nbsp;Free &nbsp;·&nbsp; No account needed</div>
+  </div>
+
+  <!-- SLIDE 2: Host -->
+  <div class="slide slide-2" id="slide2">
+    <div class="glow glow-green"></div>
+    <div class="glow glow-blue"></div>
+    <div class="logo-row">
+      <div class="logo-icon">🎵</div>
+      <div class="logo-name">SyncWave</div>
+    </div>
+    <p class="headline">Radio or<br/><span>Spotify</span></p>
+    <p class="sub">Host a room and share a code.<br/>Everyone joins in seconds.</p>
+    <div class="phone-frame">
+      <img src="/host.jpg" alt="Host screen" />
+    </div>
+    <div class="badge">📻 &nbsp;Live radio works in background</div>
+  </div>
+
+  <!-- SLIDE 3: Golf -->
+  <div class="slide slide-3" id="slide3">
+    <div class="glow glow-green" style="background:#1db954; top:-50px; left:-100px;"></div>
+    <div class="glow glow-gold"></div>
+    <div class="logo-row">
+      <div class="logo-icon">⛳</div>
+      <div class="logo-name">FairwayCaddie</div>
+    </div>
+    <p class="headline">Golf courses<br/><span>worldwide</span></p>
+    <p class="sub">GPS distance to the pin.<br/>Search any course on earth.</p>
+    <div class="phone-frame">
+      <img src="/golf.jpg" alt="Golf screen" />
+    </div>
+    <div class="badge">📍 &nbsp;Finds courses near you automatically</div>
+  </div>
+
+</body>
+</html>
