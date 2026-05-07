@@ -78,12 +78,16 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   const roomCodeRef = useRef<string | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isConnectingRef = useRef(false);
+  const pendingMessageRef = useRef<object | null>(null);
 
   const sendRef = useRef<(data: object) => void>(() => {});
 
   const send = useCallback((data: object) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(data));
+    } else {
+      // Queue it — will be flushed once the socket opens
+      pendingMessageRef.current = data;
     }
   }, []);
 
@@ -185,6 +189,9 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       const p = phaseRef.current;
       if (code && (p === "hosting" || p === "joined")) {
         ws.send(JSON.stringify({ type: "rejoin-room", code }));
+      } else if (pendingMessageRef.current) {
+        ws.send(JSON.stringify(pendingMessageRef.current));
+        pendingMessageRef.current = null;
       }
     };
 

@@ -31,7 +31,9 @@ export default function JoinScreen() {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [joining, setJoining] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
   const [spotifyError, setSpotifyError] = useState<string | null>(null);
+  const joinTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showRedirectHelp, setShowRedirectHelp] = useState(false);
 
   const driftRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -41,7 +43,11 @@ export default function JoinScreen() {
   const gpsSync = useGpsAudioSync(phase === "joined" && roomMode === "radio");
 
   useEffect(() => {
-    if (phase === "joined") setJoining(false);
+    if (phase === "joined") {
+      setJoining(false);
+      setJoinError(null);
+      if (joinTimeoutRef.current) clearTimeout(joinTimeoutRef.current);
+    }
   }, [phase]);
 
   const soundOffsetRef = useRef(0);
@@ -106,7 +112,14 @@ export default function JoinScreen() {
     if (code.length !== 4) { Alert.alert("Enter a 4-letter room code"); return; }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setJoining(true);
+    setJoinError(null);
     joinRoom(code);
+
+    if (joinTimeoutRef.current) clearTimeout(joinTimeoutRef.current);
+    joinTimeoutRef.current = setTimeout(() => {
+      setJoining(false);
+      setJoinError("Could not connect to the room. Check the code and try again.");
+    }, 10_000);
   }, [codeInput, joinRoom]);
 
   const onScanPress = useCallback(async () => {
@@ -354,6 +367,13 @@ export default function JoinScreen() {
           <Text style={[styles.scanBtnText, { color: colors.mutedForeground }]}>Scan QR Code</Text>
         </Pressable>
 
+        {joinError ? (
+          <View style={[styles.errorBox, { backgroundColor: "#f59e0b18", borderColor: "#f59e0b44", borderRadius: colors.radius }]}>
+            <Feather name="wifi-off" size={14} color="#f59e0b" />
+            <Text style={styles.joinErrorText}>{joinError}</Text>
+          </View>
+        ) : null}
+
         <Pressable
           onPress={onJoin}
           disabled={codeInput.length !== 4 || joining}
@@ -383,6 +403,8 @@ const styles = StyleSheet.create({
   scanBtnText: { fontSize: 15, fontFamily: "Inter_500Medium" },
   joinBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 16 },
   joinBtnText: { fontSize: 17, fontFamily: "Inter_600SemiBold" },
+  errorBox: { flexDirection: "row", alignItems: "center", gap: 8, padding: 12, borderWidth: 1 },
+  joinErrorText: { flex: 1, fontSize: 13, fontFamily: "Inter_400Regular", color: "#f59e0b" },
   scanOverlay: { ...StyleSheet.absoluteFillObject, alignItems: "center" },
   scanBack: { alignSelf: "flex-start", marginLeft: 16, width: 44, height: 44, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.5)", borderRadius: 22 },
   scanFrame: { width: 220, height: 220, borderWidth: 2, borderColor: "#fff", borderRadius: 16, marginTop: 60 },
