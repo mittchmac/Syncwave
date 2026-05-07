@@ -6,7 +6,10 @@
 import type { GolfCourse, GolfHole } from "@/context/GolfContext";
 import { cacheAll } from "@/lib/courseCache";
 
-const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
+const MIRRORS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.openstreetmap.fr/api/interpreter",
+];
 
 interface OverpassElement {
   type: string;
@@ -19,6 +22,7 @@ interface OverpassElement {
 
 interface OverpassResponse {
   elements: OverpassElement[];
+  remark?: string;
 }
 
 // ── Synthetic hole generator ────────────────────────────────────────────────
@@ -37,9 +41,6 @@ export function yardsForPar(par: number, idx: number): number {
   return pickYards(PAR4_YARDS, idx * 5 + 7);
 }
 
-/**
- * Generate a plausible 18-hole layout for a course with a given total par.
- */
 function generateHoles(par: number, centerLat: number, centerLng: number): GolfHole[] {
   const extra = par - 72;
   let par3s = 4, par4s = 10, par5s = 4;
@@ -122,47 +123,76 @@ function elementToCourse(el: OverpassElement): GolfCourse | null {
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
-async function runOverpassQuery(query: string): Promise<OverpassElement[]> {
+async function tryMirror(url: string, query: string, timeoutMs: number): Promise<OverpassElement[] | null> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 18_000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(OVERPASS_URL, {
+    const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: `data=${encodeURIComponent(query)}`,
       signal: controller.signal,
     });
-    if (!res.ok) throw new Error(`Overpass error ${res.status}`);
+    if (!res.ok) return null;
     const json = (await res.json()) as OverpassResponse;
+    // If server reported a timeout, treat as failure so we can try smaller radius
+    if (json.remark?.includes("timed out")) return null;
     return json.elements ?? [];
+  } catch {
+    return null;
   } finally {
     clearTimeout(timer);
   }
 }
 
+async function runOverpassQuery(query: string): Promise<OverpassElement[]> {
+  for (const mirror of MIRRORS) {
+    const result = await tryMirror(mirror, query, 20_000);
+    if (result !== null) return result;
+  }
+  throw new Error("All Overpass mirrors failed or timed out");
+}
+
+// ── Public API ─────────────────────────────────────────────────────────────────
+
 /**
  * Search for golf courses near a GPS coordinate.
- * Radius is 80km by default — returns all matching courses with no cap.
+ * Tries 25 km first (fast), expands to 50 km if nothing found.
  */
 export async function searchNearby(
   lat: number,
   lng: number,
-  radiusMeters = 80000,
 ): Promise<GolfCourse[]> {
-  const query = `
-[out:json][timeout:25];
+  const makeQuery = (radiusMeters: number) => `
+[out:json][timeout:12];
 (
   way["leisure"="golf_course"]["name"](around:${radiusMeters},${lat},${lng});
   relation["leisure"="golf_course"]["name"](around:${radiusMeters},${lat},${lng});
+  node["leisure"="golf_course"]["name"](around:${radiusMeters},${lat},${lng});
 );
 out center tags;`;
 
-  const elements = await runOverpassQuery(query);
-  const courses = elements
-    .map(elementToCourse)
-    .filter((c): c is GolfCourse => c !== null);
-  cacheAll(courses);
-  return courses;
+  // Try 25 km first — fast and covers most users
+  for (const mirror of MIRRORS) {
+    const elements = await tryMirror(mirror, makeQuery(25_000), 20_000);
+    if (elements !== null && elements.length > 0) {
+      const courses = elements.map(elementToCourse).filter((c): c is GolfCourse => c !== null);
+      cacheAll(courses);
+      return courses;
+    }
+  }
+
+  // Expand to 50 km if nothing found nearby
+  for (const mirror of MIRRORS) {
+    const elements = await tryMirror(mirror, makeQuery(50_000), 20_000);
+    if (elements !== null) {
+      const courses = elements.map(elementToCourse).filter((c): c is GolfCourse => c !== null);
+      cacheAll(courses);
+      return courses;
+    }
+  }
+
+  return [];
 }
 
 /**
@@ -174,10 +204,11 @@ export async function searchByName(nameQuery: string): Promise<GolfCourse[]> {
 
   const escaped = nameQuery.replace(/[[\](){}|^$*+?.\\]/g, "\\$&");
   const query = `
-[out:json][timeout:20];
+[out:json][timeout:12];
 (
   way["leisure"="golf_course"]["name"~"${escaped}",i];
   relation["leisure"="golf_course"]["name"~"${escaped}",i];
+  node["leisure"="golf_course"]["name"~"${escaped}",i];
 );
 out center tags;`;
 
@@ -191,15 +222,13 @@ out center tags;`;
 
 /**
  * Enrich a course's generated holes with real OSM hole GPS data.
- * OSM mappers tag individual holes with golf=hole, ref=N, par=N.
- * Returns the original generated holes if OSM doesn't have enough data.
  */
 export async function enrichWithOSMHoles(
   courseCenter: { lat: number; lng: number },
   existingHoles: GolfHole[],
 ): Promise<{ holes: GolfHole[]; enriched: boolean }> {
   const query = `
-[out:json][timeout:20];
+[out:json][timeout:12];
 (
   way["golf"="hole"](around:2500,${courseCenter.lat},${courseCenter.lng});
   relation["golf"="hole"](around:2500,${courseCenter.lat},${courseCenter.lng});
@@ -268,7 +297,6 @@ out center tags;`;
 
     osmHoles.sort((a, b) => a.number - b.number);
 
-    // Merge: OSM holes take priority, fill gaps with generated
     const result: GolfHole[] = [];
     const maxHole = Math.max(18, existingHoles.length);
     for (let i = 1; i <= maxHole; i++) {
