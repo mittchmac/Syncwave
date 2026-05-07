@@ -48,9 +48,8 @@ export default function HostScreen() {
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
 
   const domain = process.env.EXPO_PUBLIC_DOMAIN ?? "";
-  const qrValue = roomCode
-    ? `https://${domain}/music-sync?room=${roomCode}`
-    : "";
+  const qrValue = roomCode ?? "";
+  const webLink = roomCode && domain ? `https://${domain}/?room=${roomCode}` : "";
 
   useEffect(() => {
     if (phase === "hosting" && step !== "active") setStep("active");
@@ -221,8 +220,25 @@ export default function HostScreen() {
           ) : null}
 
           <Text style={[styles.qrHint, { color: colors.mutedForeground }]}>
-            Scan to open the web app, or share the code
+            Scan with SyncWave app to join instantly
           </Text>
+
+          {webLink ? (
+            <Pressable
+              onPress={async () => {
+                await Clipboard.setStringAsync(webLink);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              }}
+              style={[styles.webLinkBox, { backgroundColor: colors.card, borderColor: colors.border, borderRadius: colors.radius }]}
+            >
+              <Feather name="link" size={13} color={colors.mutedForeground} />
+              <Text style={[styles.webLinkText, { color: colors.mutedForeground }]} numberOfLines={1}>
+                {webLink}
+              </Text>
+              <Feather name={copied ? "check" : "copy"} size={13} color={copied ? colors.primary : colors.mutedForeground} />
+            </Pressable>
+          ) : null}
 
           {nowPlayingName ? (
             <View style={[styles.nowPlayingCard, { backgroundColor: colors.card, borderColor: colors.border, borderRadius: colors.radius }]}>
@@ -489,6 +505,8 @@ const styles = StyleSheet.create({
   codeText: { fontSize: 36, fontFamily: "Inter_700Bold", letterSpacing: 6 },
   qrBox: { padding: 16, alignItems: "center", justifyContent: "center", marginVertical: 4 },
   qrHint: { fontSize: 12, fontFamily: "Inter_400Regular", textAlign: "center" },
+  webLinkBox: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 10, paddingHorizontal: 12, borderWidth: 1 },
+  webLinkText: { flex: 1, fontSize: 11, fontFamily: "Inter_400Regular" },
   nowPlayingCard: { flexDirection: "row", alignItems: "center", padding: 16, borderWidth: 1, gap: 12, width: "100%" },
   nowPlayingIcon: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
   nowPlayingTitle: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
