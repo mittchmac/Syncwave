@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Platform,
   Pressable,
@@ -17,7 +18,9 @@ import * as Haptics from "expo-haptics";
 import { useColors } from "@/hooks/useColors";
 import { useGolf } from "@/context/GolfContext";
 import { getCourseById } from "@/data/courses";
-import { Player } from "@/context/GolfContext";
+import { enrichWithOSMHoles } from "@/lib/overpassCourses";
+import { cacheCourse } from "@/lib/courseCache";
+import type { GolfCourse, GolfHole, Player } from "@/context/GolfContext";
 
 export default function SetupScreen() {
   const { courseId } = useLocalSearchParams<{ courseId: string }>();
@@ -26,12 +29,45 @@ export default function SetupScreen() {
   const { startRound } = useGolf();
   const topPad = Platform.OS === "web" ? 67 : insets.top;
 
-  const course = getCourseById(courseId ?? "");
+  const baseCourse = getCourseById(courseId ?? "");
+
+  const [enrichedHoles, setEnrichedHoles] = useState<GolfHole[] | null>(null);
+  const [enriching, setEnriching] = useState(false);
+  const [enriched, setEnriched] = useState(false);
 
   const [localPlayers, setLocalPlayers] = useState<Player[]>([
     { id: "p1", name: "Player 1", handicap: 18 },
   ]);
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  // Derive the course center from the first hole's tee (OSM courses) or midpoint
+  useEffect(() => {
+    if (!baseCourse) return;
+    // Only enrich OSM courses — featured courses have manually set coordinates
+    if (!courseId?.startsWith("osm-")) return;
+
+    const firstHole = baseCourse.holes[0];
+    if (!firstHole) return;
+
+    const center = { lat: firstHole.tee.lat, lng: firstHole.tee.lng };
+
+    setEnriching(true);
+    enrichWithOSMHoles(center, baseCourse.holes)
+      .then(({ holes, enriched: wasEnriched }) => {
+        if (wasEnriched) {
+          setEnrichedHoles(holes);
+          setEnriched(true);
+          // Update cache with enriched course
+          cacheCourse({ ...baseCourse, holes });
+        }
+      })
+      .catch(() => {})
+      .finally(() => setEnriching(false));
+  }, [courseId]);
+
+  const course: GolfCourse | null = baseCourse
+    ? { ...baseCourse, holes: enrichedHoles ?? baseCourse.holes }
+    : null;
 
   const addPlayer = () => {
     if (localPlayers.length >= 6) {
@@ -163,7 +199,21 @@ export default function SetupScreen() {
 
         {/* Course info card */}
         <View style={[styles.courseInfoCard, { backgroundColor: colors.card, borderColor: colors.border, borderRadius: colors.radius }]}>
-          <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>Course Info</Text>
+          <View style={styles.courseInfoHeader}>
+            <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>Course Info</Text>
+            {enriching && (
+              <View style={styles.enrichingBadge}>
+                <ActivityIndicator size="small" color={colors.primary} style={{ transform: [{ scale: 0.7 }] }} />
+                <Text style={[styles.enrichingText, { color: colors.mutedForeground }]}>Loading GPS data…</Text>
+              </View>
+            )}
+            {enriched && !enriching && (
+              <View style={styles.enrichingBadge}>
+                <Feather name="map-pin" size={11} color={colors.primary} />
+                <Text style={[styles.enrichingText, { color: colors.primary }]}>Real GPS data</Text>
+              </View>
+            )}
+          </View>
           <View style={styles.infoGrid}>
             <InfoItem label="Holes" value={String(course.holes.length)} colors={colors} />
             <InfoItem label="Par" value={String(course.par)} colors={colors} />
@@ -232,6 +282,9 @@ const styles = StyleSheet.create({
   addPlayerBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 13, borderWidth: 1, borderStyle: "dashed" },
   addPlayerText: { fontSize: 15, fontFamily: "Inter_500Medium" },
   courseInfoCard: { padding: 16, borderWidth: 1, marginTop: 4 },
+  courseInfoHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 0 },
+  enrichingBadge: { flexDirection: "row", alignItems: "center", gap: 4 },
+  enrichingText: { fontSize: 11, fontFamily: "Inter_400Regular" },
   infoGrid: { flexDirection: "row", flexWrap: "wrap", gap: 16, marginTop: 8 },
   infoItem: { minWidth: "40%", gap: 2 },
   infoLabel: { fontSize: 11, fontFamily: "Inter_400Regular" },

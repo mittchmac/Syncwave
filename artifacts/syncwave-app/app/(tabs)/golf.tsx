@@ -55,7 +55,7 @@ export default function GolfTab() {
       try {
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
         if (cancelled) return;
-        const courses = await searchNearby(loc.coords.latitude, loc.coords.longitude, 40000);
+        const courses = await searchNearby(loc.coords.latitude, loc.coords.longitude);
         if (cancelled) return;
         setNearbyCourses(courses);
         setNearbyStatus("done");
@@ -72,7 +72,7 @@ export default function GolfTab() {
     setQuery(text);
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
 
-    if (text.trim().length < 3) {
+    if (text.trim().length < 2) {
       setSearchResults([]);
       setSearchLoading(false);
       return;
