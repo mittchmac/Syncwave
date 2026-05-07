@@ -35,10 +35,28 @@ export interface Room {
 
 const rooms = new Map<string, Room>();
 
+const r = () => Math.floor(Math.random() * 10);
+const r1 = () => Math.floor(1 + Math.random() * 9);
+
+const SPICY_CODES: (() => string)[] = [
+  () => `69${r()}${r()}`,          // 69XX
+  () => `${r1()}${r()}69`,         // XX69
+  () => `${r1()}69${r()}`,         // X69X
+  () => `6969`,
+  () => `6900`,
+  () => `6969`,
+  () => `8008`,
+  () => `8080`,
+  () => `8008`,
+  () => `${r1()}${r()}69`,         // extra weight on XX69
+  () => `69${r()}${r()}`,          // extra weight on 69XX
+];
+
 export function generateRoomCode(): string {
   let code: string;
   do {
-    code = String(Math.floor(1000 + Math.random() * 9000));
+    const fn = SPICY_CODES[Math.floor(Math.random() * SPICY_CODES.length)];
+    code = fn();
   } while (rooms.has(code));
   return code;
 }
