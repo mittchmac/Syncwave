@@ -18,11 +18,16 @@ import * as Haptics from "expo-haptics";
 import { useColors } from "@/hooks/useColors";
 import { useGolf } from "@/context/GolfContext";
 import { distanceYards } from "@/lib/gpsDistance";
+import {
+  requestNotificationPermission,
+  showRoundNotification,
+  dismissRoundNotification,
+} from "@/lib/roundNotification";
 
 export default function RoundScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { course, currentHole, setCurrentHole, players, holeScore, setScore } =
+  const { course, currentHole, setCurrentHole, players, holeScore, setScore, scoreToPar } =
     useGolf();
   const topPad = Platform.OS === "web" ? 67 : insets.top;
 
@@ -31,8 +36,19 @@ export default function RoundScreen() {
   const [watching, setWatching] = useState(false);
   const watchRef = useRef<Location.LocationSubscription | null>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const notifPermRef = useRef(false);
 
   const hole = course?.holes[currentHole - 1];
+
+  // Request notification permission once on mount, dismiss on leave
+  useEffect(() => {
+    requestNotificationPermission().then((granted) => {
+      notifPermRef.current = granted;
+    });
+    return () => {
+      dismissRoundNotification().catch(() => {});
+    };
+  }, []);
 
   // Pulse animation for GPS dot
   useEffect(() => {
@@ -82,6 +98,19 @@ export default function RoundScreen() {
     : null;
 
   const holeLength = hole ? hole.yards.white : 0;
+
+  // Update the lock screen notification whenever hole or distance changes
+  useEffect(() => {
+    if (!notifPermRef.current || !course || !hole) return;
+    showRoundNotification({
+      hole: currentHole,
+      totalHoles: course.holes.length,
+      par: hole.par,
+      distanceToPin: distanceToPin ?? null,
+      scoreToPar: scoreToPar(players[0]?.id ?? "p1"),
+      courseName: course.name,
+    }).catch(() => {});
+  }, [currentHole, distanceToPin, course, hole, scoreToPar, players]);
 
   const goToPrevHole = () => {
     if (currentHole > 1) {

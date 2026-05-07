@@ -59,6 +59,8 @@
     "expo-auth-session": "^7.0.10",
     "expo-camera": "^17.0.10",
     "expo-clipboard": "^8.0.8",
+    "expo-notifications": "^55.0.22",
+    "expo-task-manager": "^55.0.15",
     "react-native-qrcode-svg": "^6.3.21"
   }
 }
