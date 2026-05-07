@@ -15,11 +15,12 @@ import * as Haptics from "expo-haptics";
 import { useColors } from "@/hooks/useColors";
 import { useGolf } from "@/context/GolfContext";
 import { getScoreColor, getScoreLabel } from "@/data/courses";
+import { TEAM_DEFS } from "@/lib/teams";
 
 export default function ScorecardScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { course, players, holeScore, setScore, currentHole, setCurrentHole, scoreToPar, totalScore } = useGolf();
+  const { course, players, holeScore, setScore, currentHole, setCurrentHole, scoreToPar, totalScore, activeTeamIds, teamTotalScore, teamScoreToPar } = useGolf();
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const [selectedHole, setSelectedHole] = useState(currentHole);
   const [editPlayer, setEditPlayer] = useState<string | null>(null);
@@ -282,6 +283,55 @@ export default function ScorecardScreen() {
           </View>
         </ScrollView>
 
+        {/* Team Scores section */}
+        {activeTeamIds.length >= 2 && (
+          <View style={{ paddingHorizontal: 16, marginTop: 20 }}>
+            <Text style={[styles.sectionLabel, { color: colors.mutedForeground, paddingHorizontal: 0 }]}>Team Scores</Text>
+            <View style={[styles.teamScoresCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              {[...activeTeamIds]
+                .sort((a, b) => teamScoreToPar(a) - teamScoreToPar(b))
+                .map((teamId, rank) => {
+                  const def = TEAM_DEFS.find((t) => t.id === teamId);
+                  if (!def) return null;
+                  const diff = teamScoreToPar(teamId);
+                  const total = teamTotalScore(teamId);
+                  const teamPlayers = players.filter((p) => p.teamId === teamId);
+                  return (
+                    <View
+                      key={teamId}
+                      style={[
+                        styles.teamRow,
+                        { borderColor: colors.border },
+                        rank > 0 && { borderTopWidth: 1 },
+                      ]}
+                    >
+                      <Text style={[styles.teamRank, { color: colors.mutedForeground }]}>#{rank + 1}</Text>
+                      <View style={[styles.teamColorDot, { backgroundColor: def.color }]} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.teamLabel, { color: colors.foreground }]}>{def.label}</Text>
+                        <Text style={[styles.teamMembers, { color: colors.mutedForeground }]} numberOfLines={1}>
+                          {teamPlayers.map((p) => p.name.split(" ")[0]).join(", ")}
+                        </Text>
+                      </View>
+                      {total > 0 ? (
+                        <View style={{ alignItems: "flex-end" }}>
+                          <Text style={[styles.teamTotal, { color: def.color }]}>{total}</Text>
+                          <Text style={[styles.teamDiff, {
+                            color: diff < 0 ? colors.primary : diff > 0 ? "#f59e0b" : colors.mutedForeground,
+                          }]}>
+                            {diff === 0 ? "E" : diff > 0 ? `+${diff}` : `${diff}`}
+                          </Text>
+                        </View>
+                      ) : (
+                        <Text style={[styles.teamTotal, { color: colors.mutedForeground }]}>—</Text>
+                      )}
+                    </View>
+                  );
+                })}
+            </View>
+          </View>
+        )}
+
         <View style={{ height: 40 }} />
       </ScrollView>
     </View>
@@ -319,4 +369,12 @@ const styles = StyleSheet.create({
   tableHoleCell: { width: 40 },
   tableParCell: { width: 36 },
   tablePlayerCell: { width: 58 },
+  teamScoresCard: { borderRadius: 14, borderWidth: 1, marginTop: 8, overflow: "hidden" },
+  teamRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 13, gap: 10 },
+  teamRank: { fontSize: 13, fontFamily: "Inter_600SemiBold", width: 24 },
+  teamColorDot: { width: 11, height: 11, borderRadius: 6 },
+  teamLabel: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  teamMembers: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 1 },
+  teamTotal: { fontSize: 20, fontFamily: "Inter_700Bold" },
+  teamDiff: { fontSize: 11, fontFamily: "Inter_500Medium" },
 });

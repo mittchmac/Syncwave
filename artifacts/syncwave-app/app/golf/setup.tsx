@@ -6,6 +6,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -20,6 +21,7 @@ import { useGolf } from "@/context/GolfContext";
 import { getCourseById } from "@/data/courses";
 import { enrichWithOSMHoles } from "@/lib/overpassCourses";
 import { cacheCourse } from "@/lib/courseCache";
+import { TEAM_DEFS } from "@/lib/teams";
 import type { GolfCourse, GolfHole, Player } from "@/context/GolfContext";
 
 export default function SetupScreen() {
@@ -39,6 +41,7 @@ export default function SetupScreen() {
     { id: "p1", name: "Player 1", handicap: 18 },
   ]);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [teamsEnabled, setTeamsEnabled] = useState(false);
 
   // Derive the course center from the first hole's tee (OSM courses) or midpoint
   useEffect(() => {
@@ -86,6 +89,18 @@ export default function SetupScreen() {
     setLocalPlayers((prev) => prev.filter((p) => p.id !== id));
   };
 
+  const cycleTeam = (id: string) => {
+    Haptics.selectionAsync();
+    setLocalPlayers((prev) =>
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        const currentIdx = TEAM_DEFS.findIndex((t) => t.id === p.teamId);
+        const nextIdx = (currentIdx + 1) % TEAM_DEFS.length;
+        return { ...p, teamId: TEAM_DEFS[nextIdx].id };
+      })
+    );
+  };
+
   const updateName = (id: string, name: string) => {
     setLocalPlayers((prev) =>
       prev.map((p) => (p.id === id ? { ...p, name } : p))
@@ -104,7 +119,11 @@ export default function SetupScreen() {
   const handleStart = () => {
     if (!course) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    startRound(course, localPlayers);
+    // Strip teamId from all players if teams are disabled
+    const playersToStart = teamsEnabled
+      ? localPlayers
+      : localPlayers.map(({ teamId: _t, ...rest }) => rest);
+    startRound(course, playersToStart);
     router.replace("/golf/round");
   };
 
@@ -143,48 +162,83 @@ export default function SetupScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>Players</Text>
-
-        {localPlayers.map((player, idx) => (
-          <View
-            key={player.id}
-            style={[styles.playerRow, { backgroundColor: colors.card, borderColor: colors.border, borderRadius: colors.radius }]}
-          >
-            <View style={[styles.playerNumber, { backgroundColor: colors.primary + "22" }]}>
-              <Text style={[styles.playerNumberText, { color: colors.primary }]}>{idx + 1}</Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <TextInput
-                style={[styles.nameInput, { color: colors.foreground }]}
-                value={player.name}
-                onChangeText={(t) => updateName(player.id, t)}
-                placeholder="Player name"
-                placeholderTextColor={colors.mutedForeground}
-                onFocus={() => setEditingId(player.id)}
-                onBlur={() => setEditingId(null)}
-              />
-              <View style={styles.handicapRow}>
-                <Text style={[styles.handicapLabel, { color: colors.mutedForeground }]}>HCP</Text>
-                <TextInput
-                  style={[styles.handicapInput, { color: colors.foreground, borderColor: colors.border }]}
-                  value={String(player.handicap)}
-                  onChangeText={(t) => updateHandicap(player.id, t)}
-                  keyboardType="number-pad"
-                  maxLength={2}
-                />
-              </View>
-            </View>
-            {localPlayers.length > 1 && (
-              <Pressable
-                onPress={() => removePlayer(player.id)}
-                style={styles.removeBtn}
-                hitSlop={8}
-              >
-                <Feather name="x" size={18} color={colors.mutedForeground} />
-              </Pressable>
-            )}
+        {/* Players header + Teams toggle */}
+        <View style={styles.playersSectionHeader}>
+          <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>Players</Text>
+          <View style={styles.teamsToggleRow}>
+            <Text style={[styles.teamsToggleLabel, { color: colors.mutedForeground }]}>Teams</Text>
+            <Switch
+              value={teamsEnabled}
+              onValueChange={(v) => {
+                Haptics.selectionAsync();
+                setTeamsEnabled(v);
+                if (v) {
+                  // Assign everyone to Team 1 to start
+                  setLocalPlayers((prev) =>
+                    prev.map((p, i) => ({ ...p, teamId: TEAM_DEFS[i % TEAM_DEFS.length].id }))
+                  );
+                }
+              }}
+              trackColor={{ false: colors.border, true: colors.primary + "88" }}
+              thumbColor={teamsEnabled ? colors.primary : colors.mutedForeground}
+            />
           </View>
-        ))}
+        </View>
+
+        {localPlayers.map((player, idx) => {
+          const teamDef = teamsEnabled
+            ? TEAM_DEFS.find((t) => t.id === player.teamId) ?? TEAM_DEFS[0]
+            : null;
+          return (
+            <View
+              key={player.id}
+              style={[styles.playerRow, { backgroundColor: colors.card, borderColor: colors.border, borderRadius: colors.radius }]}
+            >
+              <View style={[styles.playerNumber, { backgroundColor: colors.primary + "22" }]}>
+                <Text style={[styles.playerNumberText, { color: colors.primary }]}>{idx + 1}</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <TextInput
+                  style={[styles.nameInput, { color: colors.foreground }]}
+                  value={player.name}
+                  onChangeText={(t) => updateName(player.id, t)}
+                  placeholder="Player name"
+                  placeholderTextColor={colors.mutedForeground}
+                  onFocus={() => setEditingId(player.id)}
+                  onBlur={() => setEditingId(null)}
+                />
+                <View style={styles.handicapRow}>
+                  <Text style={[styles.handicapLabel, { color: colors.mutedForeground }]}>HCP</Text>
+                  <TextInput
+                    style={[styles.handicapInput, { color: colors.foreground, borderColor: colors.border }]}
+                    value={String(player.handicap)}
+                    onChangeText={(t) => updateHandicap(player.id, t)}
+                    keyboardType="number-pad"
+                    maxLength={2}
+                  />
+                </View>
+              </View>
+              {teamsEnabled && teamDef && (
+                <Pressable
+                  onPress={() => cycleTeam(player.id)}
+                  style={[styles.teamChip, { backgroundColor: teamDef.color + "22", borderColor: teamDef.color }]}
+                  hitSlop={4}
+                >
+                  <Text style={[styles.teamChipText, { color: teamDef.color }]}>{teamDef.label}</Text>
+                </Pressable>
+              )}
+              {localPlayers.length > 1 && (
+                <Pressable
+                  onPress={() => removePlayer(player.id)}
+                  style={styles.removeBtn}
+                  hitSlop={8}
+                >
+                  <Feather name="x" size={18} color={colors.mutedForeground} />
+                </Pressable>
+              )}
+            </View>
+          );
+        })}
 
         <Pressable
           onPress={addPlayer}
@@ -271,6 +325,11 @@ const styles = StyleSheet.create({
   headerSub: { fontSize: 13, fontFamily: "Inter_400Regular", marginTop: 1 },
   content: { paddingHorizontal: 20, paddingBottom: 60, gap: 12 },
   sectionLabel: { fontSize: 11, fontFamily: "Inter_600SemiBold", letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 4 },
+  playersSectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  teamsToggleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  teamsToggleLabel: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  teamChip: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1.5, marginRight: 4 },
+  teamChipText: { fontSize: 12, fontFamily: "Inter_700Bold" },
   playerRow: { flexDirection: "row", alignItems: "center", padding: 12, gap: 12, borderWidth: 1 },
   playerNumber: { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
   playerNumberText: { fontSize: 14, fontFamily: "Inter_600SemiBold" },

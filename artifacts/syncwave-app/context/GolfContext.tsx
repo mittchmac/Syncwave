@@ -31,6 +31,7 @@ export interface Player {
   id: string;
   name: string;
   handicap: number;
+  teamId?: string;
 }
 
 export interface HoleScore {
@@ -62,6 +63,9 @@ interface GolfContextValue {
   totalScore: (playerId: string) => number;
   scoreToPar: (playerId: string) => number;
   holeScore: (hole: number, playerId: string) => number | null;
+  teamTotalScore: (teamId: string) => number;
+  teamScoreToPar: (teamId: string) => number;
+  activeTeamIds: string[];
   isRoundActive: boolean;
 }
 
@@ -242,6 +246,28 @@ export function GolfProvider({ children }: { children: React.ReactNode }) {
     [round.scores]
   );
 
+  const activeTeamIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    round.players.forEach((p) => { if (p.teamId) ids.add(p.teamId); });
+    return Array.from(ids).sort();
+  }, [round.players]);
+
+  const teamTotalScore = useCallback(
+    (teamId: string) => {
+      const teamPlayers = round.players.filter((p) => p.teamId === teamId);
+      return teamPlayers.reduce((sum, p) => sum + totalScore(p.id), 0);
+    },
+    [round.players, totalScore]
+  );
+
+  const teamScoreToPar = useCallback(
+    (teamId: string) => {
+      const teamPlayers = round.players.filter((p) => p.teamId === teamId);
+      return teamPlayers.reduce((sum, p) => sum + scoreToPar(p.id), 0);
+    },
+    [round.players, scoreToPar]
+  );
+
   return (
     <GolfContext.Provider
       value={{
@@ -260,6 +286,9 @@ export function GolfProvider({ children }: { children: React.ReactNode }) {
         totalScore,
         scoreToPar,
         holeScore,
+        teamTotalScore,
+        teamScoreToPar,
+        activeTeamIds,
         isRoundActive: round.startedAt !== null,
       }}
     >
