@@ -56,7 +56,7 @@ function overpassPost(mirrorUrl: string, query: string, timeoutMs: number): Prom
 
 async function runOverpassQuery(query: string): Promise<{ elements?: unknown[] } | null> {
   for (const mirror of MIRRORS) {
-    const result = await overpassPost(mirror, query, 20_000);
+    const result = await overpassPost(mirror, query, 6_000);
     if (result !== null) return result;
   }
   return null;

@@ -132,7 +132,7 @@ function elementToCourse(el: OverpassElement): GolfCourse | null {
 
 async function fetchViaProxy(path: string): Promise<OverpassElement[] | null> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 25_000);
+  const timer = setTimeout(() => controller.abort(), 10_000);
   try {
     const res = await fetch(`${getApiBase()}${path}`, { signal: controller.signal });
     if (!res.ok) return null;
