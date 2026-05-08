@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -116,9 +117,34 @@ export default function SetupScreen() {
     }
   };
 
-  const handleStart = () => {
+  const handleStart = async () => {
     if (!course) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+    // Request notification permission before starting — good moment to ask
+    if (Platform.OS === "ios" || Platform.OS === "android") {
+      const { requestNotificationPermission } = await import("@/lib/roundNotification");
+      const granted = await requestNotificationPermission();
+      if (!granted) {
+        await new Promise<void>((resolve) => {
+          Alert.alert(
+            "Enable Notifications",
+            "Turn on notifications to see your current hole and score on the lock screen during your round.",
+            [
+              { text: "Not Now", style: "cancel", onPress: () => resolve() },
+              {
+                text: "Open Settings",
+                onPress: () => {
+                  Linking.openSettings();
+                  resolve();
+                },
+              },
+            ]
+          );
+        });
+      }
+    }
+
     // Strip teamId from all players if teams are disabled
     const playersToStart = teamsEnabled
       ? localPlayers

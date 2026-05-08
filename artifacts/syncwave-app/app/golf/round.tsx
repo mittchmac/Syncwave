@@ -37,14 +37,14 @@ export default function RoundScreen() {
   const [watching, setWatching] = useState(false);
   const watchRef = useRef<Location.LocationSubscription | null>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
-  const notifPermRef = useRef(false);
+  const [notifPerm, setNotifPerm] = useState(false);
 
   const hole = course?.holes[currentHole - 1];
 
   // Request notification permission once on mount, dismiss on leave
   useEffect(() => {
     requestNotificationPermission().then((granted) => {
-      notifPermRef.current = granted;
+      setNotifPerm(granted);
     });
     return () => {
       dismissRoundNotification().catch(() => {});
@@ -102,7 +102,7 @@ export default function RoundScreen() {
 
   // Update the lock screen notification whenever hole or distance changes
   useEffect(() => {
-    if (!notifPermRef.current || !course || !hole) return;
+    if (!notifPerm || !course || !hole) return;
     showRoundNotification({
       hole: currentHole,
       totalHoles: course.holes.length,
