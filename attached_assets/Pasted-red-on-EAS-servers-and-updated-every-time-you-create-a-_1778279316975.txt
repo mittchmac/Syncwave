@@ -1,0 +1,38 @@
+red on EAS servers and updated every time you create a new build. Remote auto-incrementation won't edit the version in the local project files, but instead, the new version will be injected automatically during the build process. Learn more: https://docs.expo.dev/build-reference/app-versions/#remote-version-source
+Until now, this project has been using the "local" version source (which was the previous default). App version source can now be set for you automatically, or you can configure it manually by setting the "appVersionSource" value in your eas.json.
+✔ What would you like to do? › Update eas.json to use the default "remote" version source (recommended)
+✔ Updated eas.json
+Failed to resolve plugin for module "expo-notifications" relative to "/Users/mitchmcafee/Downloads/artifacts/syncwave-app/Syncwave/artifacts/syncwave-app". Do you have node modules installed?
+    Error: build command failed.
+mitchmcafee@Mitchs-MacBook-Aiir-2 syncwave-app % remote
+zsh: command not found: remote
+mitchmcafee@Mitchs-MacBook-Aiir-2 syncwave-app % # Go to the correct cloned repo (not the Downloads folder)
+cd ~/Syncwave/artifacts/syncwave-app
+
+# Install dependencies first
+npm install
+
+# Then build
+eas build --platform ios --profile production
+zsh: unknown sort specifier
+cd: no such file or directory: /Users/mitchmcafee/Syncwave/artifacts/syncwave-app
+zsh: command not found: #
+npm error code EEXIST
+npm error syscall mkdir
+npm error path /Users/mitchmcafee/.npm/_cacache/content-v2/sha512/74/6f
+npm error errno EEXIST
+npm error Invalid response body while trying to fetch https://registry.npmjs.org/@expo%2fcli: EACCES: permission denied, mkdir '/Users/mitchmcafee/.npm/_cacache/content-v2/sha512/74/6f'
+npm error File exists: /Users/mitchmcafee/.npm/_cacache/content-v2/sha512/74/6f
+npm error Remove the existing file and try again, or run npm
+npm error with --force to overwrite files recklessly.
+npm error A complete log of this run can be found in: /Users/mitchmcafee/.npm/_logs/2026-05-08T22_27_51_535Z-debug-0.log
+zsh: command not found: #
+(node:99453) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+⚠️ Detected that your app uses Expo Go for development, this is not recommended when building production apps.
+Learn more: https://expo.fyi/why-not-build-expo-go-for-production
+To suppress this warning, set EAS_BUILD_NO_EXPO_GO_WARNING=true.
+
+Failed to resolve plugin for module "expo-notifications" relative to "/Users/mitchmcafee/Downloads/artifacts/syncwave-app/Syncwave/artifacts/syncwave-app". Do you have node modules installed?
+    Error: build command failed.
