@@ -17,6 +17,9 @@
       "autoIncrement": true,
       "ios": {
         "resourceClass": "m-medium"
+      },
+      "env": {
+        "EXPO_PUBLIC_DOMAIN": "node-core--mittchmac.replit.app"
       }
     }
   }

@@ -12,10 +12,11 @@ const MIRRORS = [
   "https://overpass.openstreetmap.fr/api/interpreter",
 ];
 
+const PRODUCTION_DOMAIN = "node-core--mittchmac.replit.app";
+
 function getApiBase(): string {
-  const domain = process.env.EXPO_PUBLIC_DOMAIN;
-  if (domain) return `https://${domain}/api`;
-  return "/api";
+  const domain = process.env.EXPO_PUBLIC_DOMAIN ?? PRODUCTION_DOMAIN;
+  return `https://${domain}/api`;
 }
 
 interface OverpassElement {
