@@ -111,7 +111,7 @@ export default function RoundScreen() {
       scoreToPar: scoreToPar(players[0]?.id ?? "p1"),
       courseName: course.name,
     }).catch(() => {});
-  }, [currentHole, distanceToPin, course, hole, scoreToPar, players]);
+  }, [notifPerm, currentHole, distanceToPin, course, hole, scoreToPar, players]);
 
   const goToPrevHole = () => {
     if (currentHole > 1) {

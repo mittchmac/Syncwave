@@ -150,7 +150,10 @@ async function tryMirror(url: string, query: string, timeoutMs: number): Promise
   try {
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "SyncWave/1.0 (golf course search; https://syncwave.app)",
+      },
       body: `data=${encodeURIComponent(query)}`,
       signal: controller.signal,
     });
