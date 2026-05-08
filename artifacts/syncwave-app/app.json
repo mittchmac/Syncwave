@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.syncwave.app",
-      "buildNumber": "2",
+      "buildNumber": "9",
       "infoPlist": {
         "UIBackgroundModes": ["audio"],
         "NSLocationWhenInUseUsageDescription": "FairwayCaddie uses your GPS location to find nearby golf courses and calculate real-time yardage to each hole's pin while you play. For example, when you stand on the fairway, the app displays your exact distance to the green so you can choose the right club.",
