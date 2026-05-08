@@ -53,7 +53,22 @@ export default function GolfTab() {
 
       setNearbyStatus("loading");
       try {
-        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        // Try last-known position first (instant, no GPS wait)
+        let loc = await Location.getLastKnownPositionAsync({ maxAge: 5 * 60 * 1000 });
+
+        // Fall back to fresh position with a 15s timeout
+        if (!loc) {
+          const freshResult = await Promise.race([
+            Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 15_000)),
+          ]);
+          if (freshResult === null) {
+            if (!cancelled) setNearbyStatus("error");
+            return;
+          }
+          loc = freshResult;
+        }
+
         if (cancelled) return;
         const courses = await searchNearby(loc.coords.latitude, loc.coords.longitude);
         if (cancelled) return;
