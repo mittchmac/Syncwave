@@ -1,6 +1,6 @@
 /**
  * Golf course search via the Overpass API (OpenStreetMap).
- * Free, no API key required, global coverage.
+ * Requests are proxied through our own backend to avoid device-level blocking.
  */
 
 import type { GolfCourse, GolfHole } from "@/context/GolfContext";
@@ -10,6 +10,12 @@ const MIRRORS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.openstreetmap.fr/api/interpreter",
 ];
+
+function getApiBase(): string {
+  const domain = process.env.EXPO_PUBLIC_DOMAIN;
+  if (domain) return `https://${domain}/api`;
+  return "/api";
+}
 
 interface OverpassElement {
   type: string;
@@ -123,6 +129,21 @@ function elementToCourse(el: OverpassElement): GolfCourse | null {
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
+async function fetchViaProxy(path: string): Promise<OverpassElement[] | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25_000);
+  try {
+    const res = await fetch(`${getApiBase()}${path}`, { signal: controller.signal });
+    if (!res.ok) return null;
+    const json = (await res.json()) as OverpassResponse;
+    return json.elements ?? [];
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function tryMirror(url: string, query: string, timeoutMs: number): Promise<OverpassElement[] | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -135,7 +156,6 @@ async function tryMirror(url: string, query: string, timeoutMs: number): Promise
     });
     if (!res.ok) return null;
     const json = (await res.json()) as OverpassResponse;
-    // If server reported a timeout, treat as failure so we can try smaller radius
     if (json.remark?.includes("timed out")) return null;
     return json.elements ?? [];
   } catch {
@@ -157,12 +177,21 @@ async function runOverpassQuery(query: string): Promise<OverpassElement[]> {
 
 /**
  * Search for golf courses near a GPS coordinate.
- * Tries 25 km first (fast), expands to 50 km if nothing found.
+ * Routes through our backend proxy to avoid device-level network blocking.
  */
 export async function searchNearby(
   lat: number,
   lng: number,
 ): Promise<GolfCourse[]> {
+  // Primary: use our backend proxy (avoids carrier/device blocking of Overpass)
+  const elements = await fetchViaProxy(`/golf/nearby?lat=${lat}&lng=${lng}`);
+  if (elements !== null) {
+    const courses = elements.map(elementToCourse).filter((c): c is GolfCourse => c !== null);
+    cacheAll(courses);
+    return courses;
+  }
+
+  // Fallback: hit Overpass directly if backend is unreachable
   const makeQuery = (radiusMeters: number) => `
 [out:json][timeout:12];
 (
@@ -172,21 +201,18 @@ export async function searchNearby(
 );
 out center tags;`;
 
-  // Try 25 km first — fast and covers most users
   for (const mirror of MIRRORS) {
-    const elements = await tryMirror(mirror, makeQuery(25_000), 20_000);
-    if (elements !== null && elements.length > 0) {
-      const courses = elements.map(elementToCourse).filter((c): c is GolfCourse => c !== null);
+    const els = await tryMirror(mirror, makeQuery(25_000), 20_000);
+    if (els !== null && els.length > 0) {
+      const courses = els.map(elementToCourse).filter((c): c is GolfCourse => c !== null);
       cacheAll(courses);
       return courses;
     }
   }
-
-  // Expand to 50 km if nothing found nearby
   for (const mirror of MIRRORS) {
-    const elements = await tryMirror(mirror, makeQuery(50_000), 20_000);
-    if (elements !== null) {
-      const courses = elements.map(elementToCourse).filter((c): c is GolfCourse => c !== null);
+    const els = await tryMirror(mirror, makeQuery(50_000), 20_000);
+    if (els !== null) {
+      const courses = els.map(elementToCourse).filter((c): c is GolfCourse => c !== null);
       cacheAll(courses);
       return courses;
     }
@@ -198,10 +224,20 @@ out center tags;`;
 /**
  * Full-text search for golf courses by name (global, no cap).
  * Minimum 2 characters required.
+ * Routes through our backend proxy to avoid device-level network blocking.
  */
 export async function searchByName(nameQuery: string): Promise<GolfCourse[]> {
   if (nameQuery.trim().length < 2) return [];
 
+  // Primary: use our backend proxy
+  const elements = await fetchViaProxy(`/golf/search?q=${encodeURIComponent(nameQuery.trim())}`);
+  if (elements !== null) {
+    const courses = elements.map(elementToCourse).filter((c): c is GolfCourse => c !== null);
+    cacheAll(courses);
+    return courses;
+  }
+
+  // Fallback: hit Overpass directly
   const escaped = nameQuery.replace(/[[\](){}|^$*+?.\\]/g, "\\$&");
   const query = `
 [out:json][timeout:12];
@@ -212,10 +248,8 @@ export async function searchByName(nameQuery: string): Promise<GolfCourse[]> {
 );
 out center tags;`;
 
-  const elements = await runOverpassQuery(query);
-  const courses = elements
-    .map(elementToCourse)
-    .filter((c): c is GolfCourse => c !== null);
+  const els = await runOverpassQuery(query);
+  const courses = els.map(elementToCourse).filter((c): c is GolfCourse => c !== null);
   cacheAll(courses);
   return courses;
 }
@@ -227,7 +261,15 @@ export async function enrichWithOSMHoles(
   courseCenter: { lat: number; lng: number },
   existingHoles: GolfHole[],
 ): Promise<{ holes: GolfHole[]; enriched: boolean }> {
-  const query = `
+  try {
+    // Primary: use backend proxy
+    let elements = await fetchViaProxy(
+      `/golf/holes?lat=${courseCenter.lat}&lng=${courseCenter.lng}`,
+    );
+
+    // Fallback: direct Overpass
+    if (elements === null) {
+      const query = `
 [out:json][timeout:12];
 (
   way["golf"="hole"](around:2500,${courseCenter.lat},${courseCenter.lng});
@@ -235,9 +277,10 @@ export async function enrichWithOSMHoles(
   node["golf"="tee"](around:2500,${courseCenter.lat},${courseCenter.lng});
 );
 out center tags;`;
+      elements = await runOverpassQuery(query);
+    }
 
-  try {
-    const elements = await runOverpassQuery(query);
+    if (elements === null) return { holes: existingHoles, enriched: false };
 
     const teeNodes = elements.filter(
       (el) => el.type === "node" && el.tags?.golf === "tee",
