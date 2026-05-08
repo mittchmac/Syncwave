@@ -7,6 +7,7 @@ import type { GolfCourse, GolfHole } from "@/context/GolfContext";
 import { cacheAll } from "@/lib/courseCache";
 
 const MIRRORS = [
+  "https://overpass.kumi.systems/api/interpreter",
   "https://overpass-api.de/api/interpreter",
   "https://overpass.openstreetmap.fr/api/interpreter",
 ];
@@ -158,6 +159,9 @@ async function tryMirror(url: string, query: string, timeoutMs: number): Promise
       signal: controller.signal,
     });
     if (!res.ok) return null;
+    // Overpass returns HTML (not JSON) when rate-limited — bail out fast
+    const ct = res.headers.get("content-type") ?? "";
+    if (!ct.includes("json")) return null;
     const json = (await res.json()) as OverpassResponse;
     if (json.remark?.includes("timed out")) return null;
     return json.elements ?? [];
@@ -179,14 +183,14 @@ async function runOverpassQuery(query: string): Promise<OverpassElement[]> {
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 /**
- * Search for golf courses near a GPS coordinate.
- * Routes through our backend proxy to avoid device-level network blocking.
+ * Returns GolfCourse[] when successful (may be empty if none nearby),
+ * or null when every data source is unavailable (rate-limited / network error).
  */
 export async function searchNearby(
   lat: number,
   lng: number,
-): Promise<GolfCourse[]> {
-  // Primary: use our backend proxy (avoids carrier/device blocking of Overpass)
+): Promise<GolfCourse[] | null> {
+  // Primary: use our backend proxy (avoids carrier/device IP rate-limits)
   const elements = await fetchViaProxy(`/golf/nearby?lat=${lat}&lng=${lng}`);
   if (elements !== null) {
     const courses = elements.map(elementToCourse).filter((c): c is GolfCourse => c !== null);
@@ -194,7 +198,7 @@ export async function searchNearby(
     return courses;
   }
 
-  // Fallback: hit Overpass directly if backend is unreachable
+  // Fallback: hit Overpass directly
   const makeQuery = (radiusMeters: number) => `
 [out:json][timeout:12];
 (
@@ -204,24 +208,26 @@ export async function searchNearby(
 );
 out center tags;`;
 
-  for (const mirror of MIRRORS) {
-    const els = await tryMirror(mirror, makeQuery(25_000), 20_000);
-    if (els !== null && els.length > 0) {
-      const courses = els.map(elementToCourse).filter((c): c is GolfCourse => c !== null);
-      cacheAll(courses);
-      return courses;
+  let anyMirrorResponded = false;
+
+  for (const radiusM of [25_000, 50_000]) {
+    for (const mirror of MIRRORS) {
+      const els = await tryMirror(mirror, makeQuery(radiusM), 15_000);
+      if (els !== null) {
+        anyMirrorResponded = true;
+        if (els.length > 0 || radiusM === 50_000) {
+          const courses = els.map(elementToCourse).filter((c): c is GolfCourse => c !== null);
+          cacheAll(courses);
+          return courses;
+        }
+        break; // mirror responded with 0 at 25km → try 50km
+      }
     }
-  }
-  for (const mirror of MIRRORS) {
-    const els = await tryMirror(mirror, makeQuery(50_000), 20_000);
-    if (els !== null) {
-      const courses = els.map(elementToCourse).filter((c): c is GolfCourse => c !== null);
-      cacheAll(courses);
-      return courses;
-    }
+    if (anyMirrorResponded) break;
   }
 
-  return [];
+  // All mirrors failed (rate-limited or network error)
+  return anyMirrorResponded ? [] : null;
 }
 
 /**

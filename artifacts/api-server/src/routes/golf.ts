@@ -5,6 +5,7 @@ import { URL } from "node:url";
 const router: IRouter = Router();
 
 const MIRRORS = [
+  "https://overpass.kumi.systems/api/interpreter",
   "https://overpass-api.de/api/interpreter",
   "https://overpass.openstreetmap.fr/api/interpreter",
 ];
@@ -31,6 +32,9 @@ function overpassPost(mirrorUrl: string, query: string, timeoutMs: number): Prom
         res.on("data", (chunk: string) => { data += chunk; });
         res.on("end", () => {
           if (!res.statusCode || res.statusCode >= 400) { resolve(null); return; }
+          // Overpass returns HTML when rate-limited — bail fast, don't try JSON.parse
+          const ct = res.headers["content-type"] ?? "";
+          if (!ct.includes("json")) { resolve(null); return; }
           try {
             const json = JSON.parse(data) as { elements?: unknown[]; remark?: string };
             if (json.remark?.includes("timed out")) { resolve(null); return; }

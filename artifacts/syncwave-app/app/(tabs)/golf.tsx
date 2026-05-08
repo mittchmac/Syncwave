@@ -22,7 +22,7 @@ import { FEATURED_COURSES, searchCourses } from "@/data/courses";
 import { searchNearby, searchByName } from "@/lib/overpassCourses";
 import type { GolfCourse } from "@/context/GolfContext";
 
-type NearbyStatus = "idle" | "requesting" | "loading" | "done" | "denied" | "error";
+type NearbyStatus = "idle" | "requesting" | "loading" | "done" | "denied" | "error" | "unavailable";
 
 export default function GolfTab() {
   const colors = useColors();
@@ -71,10 +71,14 @@ export default function GolfTab() {
         }
 
         if (cancelled) return;
-        const courses = await searchNearby(loc.coords.latitude, loc.coords.longitude);
+        const result = await searchNearby(loc.coords.latitude, loc.coords.longitude);
         if (cancelled) return;
-        setNearbyCourses(courses);
-        setNearbyStatus("done");
+        if (result === null) {
+          setNearbyStatus("unavailable");
+        } else {
+          setNearbyCourses(result);
+          setNearbyStatus("done");
+        }
       } catch {
         if (!cancelled) setNearbyStatus("error");
       }
@@ -238,13 +242,44 @@ function NearbySection({ status, courses, onRetry }: { status: NearbyStatus; cou
       <>
         <SectionHeader label="Nearby Courses" />
         <View style={[styles.nearbyLoader, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <Feather name="wifi-off" size={16} color={colors.mutedForeground} />
+          <Feather name="map-pin" size={16} color={colors.mutedForeground} />
           <Text style={[styles.nearbyLoaderText, { color: colors.mutedForeground, flex: 1 }]}>
-            Could not load nearby courses
+            Couldn't get your location
           </Text>
           <Pressable onPress={onRetry} style={[styles.retryBtn, { borderColor: colors.border }]}>
             <Text style={[styles.retryText, { color: colors.primary }]}>Retry</Text>
           </Pressable>
+        </View>
+      </>
+    );
+  }
+
+  if (status === "unavailable") {
+    return (
+      <>
+        <SectionHeader label="Nearby Courses" />
+        <View style={[styles.nearbyLoader, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Feather name="wifi-off" size={16} color={colors.mutedForeground} />
+          <Text style={[styles.nearbyLoaderText, { color: colors.mutedForeground, flex: 1 }]}>
+            Map service unavailable — search by name above
+          </Text>
+          <Pressable onPress={onRetry} style={[styles.retryBtn, { borderColor: colors.border }]}>
+            <Text style={[styles.retryText, { color: colors.primary }]}>Retry</Text>
+          </Pressable>
+        </View>
+      </>
+    );
+  }
+
+  if (status === "done" && courses.length === 0) {
+    return (
+      <>
+        <SectionHeader label="Nearby Courses" />
+        <View style={[styles.nearbyLoader, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Feather name="map" size={16} color={colors.mutedForeground} />
+          <Text style={[styles.nearbyLoaderText, { color: colors.mutedForeground, flex: 1 }]}>
+            No courses found nearby — try searching by name
+          </Text>
         </View>
       </>
     );
