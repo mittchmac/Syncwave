@@ -64,7 +64,6 @@ export async function showRoundNotification(data: RoundNotifData): Promise<void>
       title,
       body,
       subtitle: courseName,
-      sticky: true,
       autoDismiss: false,
       data: { type: "golf-round" },
     },

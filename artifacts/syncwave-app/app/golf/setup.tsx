@@ -23,6 +23,7 @@ import { getCourseById } from "@/data/courses";
 import { enrichWithOSMHoles } from "@/lib/overpassCourses";
 import { cacheCourse } from "@/lib/courseCache";
 import { TEAM_DEFS } from "@/lib/teams";
+import { requestNotificationPermission } from "@/lib/roundNotification";
 import type { GolfCourse, GolfHole, Player } from "@/context/GolfContext";
 
 export default function SetupScreen() {
@@ -121,28 +122,29 @@ export default function SetupScreen() {
     if (!course) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-    // Request notification permission before starting — good moment to ask
-    if (Platform.OS === "ios" || Platform.OS === "android") {
-      const { requestNotificationPermission } = await import("@/lib/roundNotification");
-      const granted = await requestNotificationPermission();
-      if (!granted) {
-        await new Promise<void>((resolve) => {
-          Alert.alert(
-            "Enable Notifications",
-            "Turn on notifications to see your current hole and score on the lock screen during your round.",
-            [
-              { text: "Not Now", style: "cancel", onPress: () => resolve() },
-              {
-                text: "Open Settings",
-                onPress: () => {
-                  Linking.openSettings();
-                  resolve();
+    // Request notification permission before starting — good moment to ask.
+    // Wrapped in try/catch so a permission error never blocks the round from starting.
+    try {
+      if (Platform.OS === "ios" || Platform.OS === "android") {
+        const granted = await requestNotificationPermission();
+        if (!granted) {
+          await new Promise<void>((resolve) => {
+            Alert.alert(
+              "Enable Notifications",
+              "Turn on notifications to see your current hole and score on the lock screen during your round.",
+              [
+                { text: "Not Now", style: "cancel", onPress: () => resolve() },
+                {
+                  text: "Open Settings",
+                  onPress: () => { Linking.openSettings(); resolve(); },
                 },
-              },
-            ]
-          );
-        });
+              ]
+            );
+          });
+        }
       }
+    } catch {
+      // Notification permission failing should never block starting the round
     }
 
     // Strip teamId from all players if teams are disabled
