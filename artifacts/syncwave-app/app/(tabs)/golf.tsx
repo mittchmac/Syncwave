@@ -36,11 +36,12 @@ export default function GolfTab() {
 
   const [nearbyCourses, setNearbyCourses] = useState<GolfCourse[]>([]);
   const [nearbyStatus, setNearbyStatus] = useState<NearbyStatus>("idle");
+  const [nearbyRetryKey, setNearbyRetryKey] = useState(0);
 
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const localResults = searchCourses(query);
 
-  // ── GPS nearby on mount ──────────────────────────────────────────────────
+  // ── GPS nearby on mount (or retry) ──────────────────────────────────────
   useEffect(() => {
     if (isRoundActive) return;
     let cancelled = false;
@@ -80,7 +81,7 @@ export default function GolfTab() {
     })();
 
     return () => { cancelled = true; };
-  }, [isRoundActive]);
+  }, [isRoundActive, nearbyRetryKey]);
 
   // ── Debounced text search ────────────────────────────────────────────────
   const onQueryChange = useCallback((text: string) => {
@@ -179,7 +180,11 @@ export default function GolfTab() {
         ) : (
           <>
             {/* GPS nearby section */}
-            <NearbySection status={nearbyStatus} courses={nearbyCourses} />
+            <NearbySection
+              status={nearbyStatus}
+              courses={nearbyCourses}
+              onRetry={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setNearbyRetryKey((k) => k + 1); }}
+            />
 
             {/* Featured courses */}
             <SectionHeader label="Featured Courses" />
@@ -195,7 +200,7 @@ export default function GolfTab() {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function NearbySection({ status, courses }: { status: NearbyStatus; courses: GolfCourse[] }) {
+function NearbySection({ status, courses, onRetry }: { status: NearbyStatus; courses: GolfCourse[]; onRetry: () => void }) {
   const colors = useColors();
 
   if (status === "idle" || status === "requesting") return null;
@@ -234,9 +239,12 @@ function NearbySection({ status, courses }: { status: NearbyStatus; courses: Gol
         <SectionHeader label="Nearby Courses" />
         <View style={[styles.nearbyLoader, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <Feather name="wifi-off" size={16} color={colors.mutedForeground} />
-          <Text style={[styles.nearbyLoaderText, { color: colors.mutedForeground }]}>
+          <Text style={[styles.nearbyLoaderText, { color: colors.mutedForeground, flex: 1 }]}>
             Could not load nearby courses
           </Text>
+          <Pressable onPress={onRetry} style={[styles.retryBtn, { borderColor: colors.border }]}>
+            <Text style={[styles.retryText, { color: colors.primary }]}>Retry</Text>
+          </Pressable>
         </View>
       </>
     );
@@ -423,6 +431,8 @@ const styles = StyleSheet.create({
   courseArrow: { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
   nearbyLoader: { flexDirection: "row", alignItems: "center", gap: 10, padding: 14, borderRadius: 12, borderWidth: 1, marginBottom: 10 },
   nearbyLoaderText: { fontSize: 14, fontFamily: "Inter_400Regular" },
+  retryBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1 },
+  retryText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   empty: { alignItems: "center", paddingVertical: 40, gap: 10 },
   emptyText: { fontSize: 14, fontFamily: "Inter_400Regular", textAlign: "center" },
   activeLabel: { fontSize: 11, fontFamily: "Inter_600SemiBold", letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 4 },
